@@ -23,7 +23,7 @@ func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[st
 		argv = append(argv, renderFlag(name, v)...)
 	}
 	argv = append(argv, args...)
-	if tool.gated {
+	if tool.injectConfirm {
 		argv = append(argv, "--yes")
 	}
 	argv = append(argv, "--format", "jsonl")

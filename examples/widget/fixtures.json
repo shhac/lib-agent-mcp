@@ -1,5 +1,6 @@
 [
-  {"id": "w-1", "title": "First widget", "status": "active"},
-  {"id": "w-2", "title": "Second widget", "status": "archived"},
-  {"id": "w-3", "title": "Third widget", "status": "active"}
+  {"id": "w-1", "title": "First widget", "status": "active", "score": 9.5, "tags": ["alpha", "beta"], "note": "flagship"},
+  {"id": "w-2", "title": "Second widget", "status": "archived", "score": 4.0, "tags": ["beta"]},
+  {"id": "w-3", "title": "Third widget", "status": "active", "score": 7.25, "tags": [], "note": ""},
+  {"id": "w-4", "title": "Fourth widget", "status": "active", "score": 6.0}
 ]

@@ -86,15 +86,23 @@ Infra/plumbing flags are hidden from schemas: `format`, `debug`, `timeout`,
 `help` by default (extend via `WithHiddenFlags`), plus any flag marked
 `mcp.hidden`. The bridge owns `--format` (always forces `jsonl`).
 
-### Destructive gating (`--yes`)
+### Destructive hint vs. `--yes` injection
 
-A `--yes`-gated command is marked `destructiveHint: true` and the bridge
-**injects `--yes` on execution**. Rationale: the MCP host gets user
-confirmation *before* calling a destructive tool (that's what `destructiveHint`
-is for); by the time the call arrives, approval has happened, so the CLI's own
-`--yes` gate is redundant and the bridge satisfies it. `--yes` itself is hidden
-from the schema so the model can't self-confirm. (A future `WithConfirmField`
-could instead expose an explicit `confirm: true` parameter.)
+Two related but distinct signals, deliberately decoupled:
+
+- **`destructiveHint: true`** is set when a command has a `--yes` flag *or* the
+  `mcp.destructive` annotation. It tells the MCP host to confirm with the user
+  before calling the tool.
+- **`--yes` injection** happens *only* when the command actually defines a
+  `--yes` flag. By the time a `tools/call` arrives, host confirmation has
+  already happened, so the bridge satisfies the CLI's own gate by injecting
+  `--yes` (kept hidden from the schema so the model can't self-confirm).
+
+A command annotated `mcp.destructive` with **no** `--yes` flag is still hinted
+as destructive but nothing is injected — injecting an undefined flag would make
+cobra error `unknown flag`. (A future `WithConfirmField` could instead expose an
+explicit `confirm: true` parameter.) The `examples/widget` `config set` (hint,
+no inject) and `config reset` (hint + inject) cover both paths in the e2e test.
 
 ## Output translation (NDJSON contract → MCP result)
 

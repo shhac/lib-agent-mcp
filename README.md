@@ -74,8 +74,9 @@ including the Claude Cowork transport constraints.
 
 ## Example
 
-[`examples/widget`](examples/widget) is a minimal cobra CLI built on
-`lib-agent-output`. Try it:
+[`examples/widget`](examples/widget) is a kitchen-sink cobra CLI built on
+`lib-agent-output` that exercises every flag type, every annotation, and every
+output helper — it doubles as the bridge's end-to-end test fixture. Try it:
 
 ```sh
 go build -o /tmp/widget ./examples/widget

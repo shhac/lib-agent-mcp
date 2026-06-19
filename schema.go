@@ -14,8 +14,8 @@ type Tool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	Annotations map[string]any `json:"annotations,omitempty"`
 
-	path  []string // command path relative to root, e.g. ["item", "get"]
-	gated bool     // destructive: inject --yes when called
+	path          []string // command path relative to root, e.g. ["item", "get"]
+	injectConfirm bool     // command has a --yes flag → inject it when called
 }
 
 var skipCommands = map[string]bool{
@@ -59,11 +59,12 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 
 	optionProps := map[string]any{}
 	var optionRequired []string
-	gated := cmd.Annotations[AnnotationDestructive] == "true"
+	hasConfirm := false
+	annotatedDestructive := cmd.Annotations[AnnotationDestructive] == "true"
 
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
 		if f.Name == "yes" {
-			gated = true // the bridge owns confirmation; keep --yes out of the schema
+			hasConfirm = true // bridge injects --yes on call; keep it out of the schema
 			return
 		}
 		if f.Hidden || s.opts.hiddenFlags[f.Name] || f.Annotations[AnnotationFlagHidden] != nil {
@@ -74,6 +75,10 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 			optionRequired = append(optionRequired, f.Name)
 		}
 	})
+
+	// destructiveHint is the broader signal (host should confirm); injecting
+	// --yes only makes sense when the command actually defines that flag.
+	destructive := hasConfirm || annotatedDestructive
 
 	optionsSchema := map[string]any{
 		"type":       "object",
@@ -99,16 +104,16 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 	if cmd.Annotations[AnnotationReadOnly] == "true" {
 		annotations["readOnlyHint"] = true
 	}
-	if gated {
+	if destructive {
 		annotations["destructiveHint"] = true
 	}
 
 	t := Tool{
-		Name:        strings.Join(parts, s.opts.nameSeparator),
-		Description: desc,
-		InputSchema: input,
-		path:        parts,
-		gated:       gated,
+		Name:          strings.Join(parts, s.opts.nameSeparator),
+		Description:   desc,
+		InputSchema:   input,
+		path:          parts,
+		injectConfirm: hasConfirm,
 	}
 	if len(annotations) > 0 {
 		t.Annotations = annotations

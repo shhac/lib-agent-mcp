@@ -69,15 +69,20 @@ func TestEndToEnd(t *testing.T) {
 
 	send(rpc(2, "tools/list", nil))
 	tools := toolNames(result(t, recv()))
-	for _, want := range []string{"item_list", "item_get", "item_delete"} {
+	for _, want := range []string{"item_list", "item_get", "item_search", "item_delete", "config_get", "config_set", "config_reset"} {
 		if !tools[want] {
 			t.Errorf("tools/list missing %q; have %v", want, tools)
 		}
 	}
+	for _, gone := range []string{"item", "config", "admin", "admin_secret"} {
+		if tools[gone] {
+			t.Errorf("tools/list should not contain %q", gone)
+		}
+	}
 
 	send(call(3, "item_list", nil, nil))
-	if got := len(records(t, recv())); got != 3 {
-		t.Errorf("item_list returned %d records, want 3", got)
+	if got := len(records(t, recv())); got != 4 {
+		t.Errorf("item_list returned %d records, want 4", got)
 	}
 
 	send(call(4, "item_get", []any{"w-2"}, nil))
@@ -95,12 +100,27 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("missing item_get fixable_by = %q, want agent", fb)
 	}
 
-	// Gated: the bridge injects --yes, so the delete succeeds rather than
-	// dead-ending on the confirmation gate.
+	// --yes flag present: the bridge injects --yes, so the delete succeeds
+	// rather than dead-ending on the confirmation gate.
 	send(call(6, "item_delete", []any{"w-1"}, nil))
 	del := records(t, recv())
 	if len(del) != 1 || del[0].(map[string]any)["deleted"] != "w-1" {
 		t.Errorf("item_delete result = %v", del)
+	}
+
+	// mcp.destructive WITHOUT a --yes flag: the bridge must NOT inject --yes
+	// (cobra would reject an unknown flag). The call should still succeed.
+	send(call(7, "config_set", []any{"theme", "light"}, nil))
+	set := records(t, recv())
+	if len(set) != 1 || set[0].(map[string]any)["set"] != "theme" {
+		t.Errorf("config_set result = %v", set)
+	}
+
+	// --yes flag present: injected, so reset runs.
+	send(call(8, "config_reset", nil, nil))
+	reset := records(t, recv())
+	if len(reset) != 1 || reset[0].(map[string]any)["reset"] != true {
+		t.Errorf("config_reset result = %v", reset)
 	}
 }
 
