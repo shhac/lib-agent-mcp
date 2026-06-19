@@ -94,8 +94,16 @@ go test ./...   # unit + end-to-end (builds widget, drives a real MCP handshake)
 go vet ./...
 ```
 
-This module depends on `lib-agent-output` via a local `replace` directive
-(`../lib-agent-output`) until both are published. See [`AGENTS.md`](AGENTS.md).
+This module depends on the published
+[`github.com/shhac/lib-agent-output`](https://github.com/shhac/lib-agent-output)
+`v0.1.0`. For local cross-repo development against a checkout at
+`../lib-agent-output`, use a (gitignored) `go.work`:
+
+```sh
+go work init . ../lib-agent-output
+```
+
+See [`AGENTS.md`](AGENTS.md).
 
 ## License
 

@@ -39,15 +39,20 @@ Always run `go vet` and `go test ./...` before considering a change done.
 ## Dependency on lib-agent-output
 
 The NDJSON contract types live in the sibling module
-`github.com/shhac/lib-agent-output`, wired in via a local `replace` in `go.mod`:
+`github.com/shhac/lib-agent-output`, pinned to a published tag in `go.mod`
+(`require github.com/shhac/lib-agent-output v0.1.0`). Do **not** re-implement
+the contract types here — import them.
 
-```
-replace github.com/shhac/lib-agent-output => ../lib-agent-output
+For local cross-repo development (editing both at once without re-tagging), use
+a gitignored `go.work` at the repo root:
+
+```sh
+go work init . ../lib-agent-output
 ```
 
-So the sibling repo must be checked out at `../lib-agent-output`. Do **not**
-re-implement the contract types here — import them. When publishing, drop the
-`replace` and pin a tagged version.
+`go.work`/`go.work.sum` are gitignored, so they never affect the published
+dependency. To cut a new release, tag `lib-agent-output` first, then bump the
+`require` here and re-tag.
 
 ## Conventions / how to infer things
 
