@@ -1,0 +1,13 @@
+# Binaries
+*.exe
+*.test
+*.out
+/widget
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS / editor
+.DS_Store
+*.swp
