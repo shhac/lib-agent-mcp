@@ -95,3 +95,23 @@ func TestTranslateSuccessAppendsStderrNotice(t *testing.T) {
 		t.Errorf("content blocks = %d, want 2 (records + notice)", got)
 	}
 }
+
+func TestSingleMetaKey(t *testing.T) {
+	if k, _, ok := singleMetaKey(map[string]any{"@x": 1}); !ok || k != "@x" {
+		t.Error(`{"@x":1} should be metadata`)
+	}
+	if _, _, ok := singleMetaKey(map[string]any{"x": 1}); ok {
+		t.Error("a single non-@ key is a record, not metadata")
+	}
+	if _, _, ok := singleMetaKey(map[string]any{"a": 1, "b": 2}); ok {
+		t.Error("a multi-key object is a record, not metadata")
+	}
+}
+
+func TestParseErrorReturnsLastErrorLine(t *testing.T) {
+	stderr := []byte(`{"notice":"warming"}` + "\n" + `{"error":"boom","fixable_by":"agent"}` + "\n")
+	obj := parseError(stderr)
+	if obj == nil || obj["error"] != "boom" {
+		t.Errorf("parseError should return the last error line, got %v", obj)
+	}
+}

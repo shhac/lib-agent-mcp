@@ -1,8 +1,10 @@
 package agentmcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +77,34 @@ func TestDispatchToolsList(t *testing.T) {
 	tools, ok := res["tools"].([]Tool)
 	if !ok || len(tools) == 0 {
 		t.Fatalf("tools/list returned no tools: %v", res["tools"])
+	}
+}
+
+func TestServeSkipsNotificationsAndMalformedLines(t *testing.T) {
+	s := newServer(testRoot())
+	in := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"ping"}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`, // notification → no response
+		`not json at all`, // malformed → silently skipped
+		``,                // blank line → skipped
+		`{"jsonrpc":"2.0","id":2,"method":"ping"}`,
+	}, "\n") + "\n")
+
+	var out bytes.Buffer
+	if err := s.Serve(context.Background(), in, &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 responses (only the two pings), got %d: %q", len(lines), out.String())
+	}
+	for _, line := range lines {
+		var resp map[string]any
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			t.Fatalf("response not valid JSON: %q", line)
+		}
+		if resp["id"] == nil {
+			t.Errorf("response missing id (a notification leaked a response?): %q", line)
+		}
 	}
 }

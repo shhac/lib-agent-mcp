@@ -70,7 +70,7 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
 	case "initialize":
 		resp.Result = s.handleInitialize(req.Params)
 	case "tools/list":
-		resp.Result = map[string]any{"tools": s.buildTools()}
+		resp.Result = map[string]any{"tools": s.tools}
 	case "tools/call":
 		result, rerr := s.handleToolCall(ctx, req.Params)
 		if rerr != nil {
@@ -113,14 +113,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 		return nil, &rpcError{Code: -32602, Message: "invalid params: " + err.Error()}
 	}
 
-	tools := s.buildTools()
-	var tool *Tool
-	for i := range tools {
-		if tools[i].Name == p.Name {
-			tool = &tools[i]
-			break
-		}
-	}
+	tool := s.toolsByName[p.Name]
 	if tool == nil {
 		return nil, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
 	}

@@ -60,10 +60,14 @@ func WithExecutable(path string) Option {
 	return func(o *options) { o.executable = path }
 }
 
-// Server serves a cobra command tree over the MCP stdio transport.
+// Server serves a cobra command tree over the MCP stdio transport. The tool
+// list is derived once at construction (the command tree is static after
+// setup) and reused for every tools/list and tools/call.
 type Server struct {
-	root *cobra.Command
-	opts options
+	root        *cobra.Command
+	opts        options
+	tools       []Tool
+	toolsByName map[string]*Tool
 }
 
 var defaultHiddenFlags = []string{"format", "debug", "timeout", "help"}
@@ -81,7 +85,13 @@ func newServer(root *cobra.Command, opts ...Option) *Server {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return &Server{root: root, opts: o}
+	s := &Server{root: root, opts: o}
+	s.tools = s.buildTools()
+	s.toolsByName = make(map[string]*Tool, len(s.tools))
+	for i := range s.tools {
+		s.toolsByName[s.tools[i].Name] = &s.tools[i]
+	}
+	return s
 }
 
 // Command returns an "mcp" subcommand that serves root's command tree over
