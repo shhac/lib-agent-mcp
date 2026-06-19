@@ -63,3 +63,35 @@ func TestTranslateNonJSONStdoutDegradesToText(t *testing.T) {
 		t.Error("raw stdout should survive as text content")
 	}
 }
+
+func TestTranslateCapturesMultipleMetaKeys(t *testing.T) {
+	r := runResult{stdout: []byte(
+		`{"id":"a"}` + "\n" +
+			`{"@pagination":{"has_more":false}}` + "\n" +
+			`{"@counts":{"n":1}}` + "\n")}
+	res := translate(r)
+	sc := res["structuredContent"].(map[string]any)
+	if got := len(sc["records"].([]any)); got != 1 {
+		t.Errorf("records = %d, want 1", got)
+	}
+	meta := sc["meta"].(map[string]any)
+	for _, k := range []string{"@pagination", "@counts"} {
+		if _, ok := meta[k]; !ok {
+			t.Errorf("missing meta key %q", k)
+		}
+	}
+}
+
+func TestTranslateSuccessAppendsStderrNotice(t *testing.T) {
+	r := runResult{
+		stdout: []byte(`{"id":"a"}` + "\n"),
+		stderr: []byte(`{"notice":"compact projection"}` + "\n"),
+	}
+	res := translate(r)
+	if res["isError"].(bool) {
+		t.Fatal("notice on stderr must not make a success a failure")
+	}
+	if got := len(res["content"].([]any)); got != 2 {
+		t.Errorf("content blocks = %d, want 2 (records + notice)", got)
+	}
+}
