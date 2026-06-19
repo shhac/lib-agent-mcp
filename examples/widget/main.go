@@ -8,7 +8,7 @@
 //     with no --yes flag, and an mcp.skip subtree.
 //   - lib-agent-output producers: NDJSONWriter records, WritePagination,
 //     WriteMetaLine (custom @counts), WriteNotice, all three fixable_by error
-//     classes, Prune, Print/PrintJSON, WriteList, and Format routing.
+//     classes, PruneEmpty, Print/PrintJSON, WriteList, and Format routing.
 package main
 
 import (
@@ -121,7 +121,7 @@ func itemCommand() *cobra.Command {
 				"@counts":                map[string]any{"returned": len(items), "matched": matched},
 			}
 			output.WriteNotice(os.Stderr, "compact projection; pass --full for raw payloads", "")
-			return output.WriteList(os.Stdout, listFormat(cmd), items, meta, true)
+			return output.WriteList(os.Stdout, listFormat(cmd), items, meta, output.PruneEmpty)
 		},
 	}
 	list.Flags().Int("limit", 0, "Maximum widgets to return")
@@ -139,7 +139,7 @@ func itemCommand() *cobra.Command {
 				return output.New(fmt.Sprintf("widget %q not found", args[0]), output.FixableByAgent).
 					WithHint("list ids with 'widget item list'")
 			}
-			return output.Print(os.Stdout, w, singleFormat(cmd), true)
+			return output.Print(os.Stdout, w, singleFormat(cmd), output.PruneEmpty)
 		},
 	}
 
@@ -173,7 +173,7 @@ func itemCommand() *cobra.Command {
 					break
 				}
 			}
-			return output.WriteList(os.Stdout, listFormat(cmd), items, nil, true)
+			return output.WriteList(os.Stdout, listFormat(cmd), items, nil, output.PruneEmpty)
 		},
 	}
 	search.Flags().String("query", "", "Search query (matches title)")
@@ -227,9 +227,9 @@ func configCommand() *cobra.Command {
 					return output.New(fmt.Sprintf("unknown config key %q", args[0]), output.FixableByAgent).
 						WithHint("list keys with 'widget config get'")
 				}
-				return output.Print(os.Stdout, map[string]any{args[0]: v}, singleFormat(cmd), true)
+				return output.Print(os.Stdout, map[string]any{args[0]: v}, singleFormat(cmd), output.PruneEmpty)
 			}
-			return output.Print(os.Stdout, configData, singleFormat(cmd), true)
+			return output.Print(os.Stdout, configData, singleFormat(cmd), output.PruneEmpty)
 		},
 	}
 
