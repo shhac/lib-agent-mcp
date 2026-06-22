@@ -29,7 +29,7 @@ func TestRenderFlag(t *testing.T) {
 }
 
 func TestBuildArgv(t *testing.T) {
-	tool := &Tool{path: []string{"item", "delete"}, injectConfirm: true}
+	tool := &Tool{path: []string{"item", "delete"}}
 	got := buildArgv(tool, []string{"w-1"}, map[string]any{"force": true, "limit": float64(5)}, true)
 	want := []string{"item", "delete", "--force=true", "--limit=5", "w-1", "--yes", "--format", "jsonl"}
 	if !reflect.DeepEqual(got, want) {

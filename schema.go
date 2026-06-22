@@ -15,10 +15,10 @@ type Tool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	Annotations map[string]any `json:"annotations,omitempty"`
 
-	path          []string       // command path relative to root, e.g. ["item", "get"]
-	injectConfirm bool           // leaf: command has a --yes flag → inject it when called
-	group         bool           // group tool: dispatch subcommands via args[0] + "help" verb
-	cmd           *cobra.Command // the cobra command (group or leaf) this tool maps to
+	path  []string       // command path relative to root, e.g. ["item", "get"]
+	group bool           // group tool: dispatch subcommands via args[0] + "help" verb
+	cmd   *cobra.Command // the cobra command (group or leaf) this tool maps to; the
+	//                      call-time --yes decision reads commandConfirms(cmd)
 }
 
 var skipCommands = map[string]bool{
@@ -179,12 +179,11 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 	}
 
 	t := Tool{
-		Name:          strings.Join(parts, s.opts.nameSeparator),
-		Description:   desc,
-		InputSchema:   input,
-		path:          parts,
-		injectConfirm: commandConfirms(cmd),
-		cmd:           cmd,
+		Name:        strings.Join(parts, s.opts.nameSeparator),
+		Description: desc,
+		InputSchema: input,
+		path:        parts,
+		cmd:         cmd,
 	}
 	if len(annotations) > 0 {
 		t.Annotations = annotations

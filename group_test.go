@@ -78,7 +78,7 @@ func TestExpose_HelpVerb(t *testing.T) {
 	}
 	// Empty args, "help", and an unknown subcommand all return the usage.
 	for _, args := range [][]string{nil, {"help"}, {"bogus"}} {
-		help := helpText(s.callGroup(context.Background(), &item, args, nil))
+		help := helpText(s.callTool(context.Background(), &item, args, nil))
 		for _, want := range []string{"get", "list", "delete", "--limit"} {
 			if !strings.Contains(help, want) {
 				t.Errorf("args %v: help missing %q:\n%s", args, want, help)
@@ -152,7 +152,7 @@ func TestCallGroup_SkipAndNonRunnableFallToHelp(t *testing.T) {
 	}
 
 	for _, args := range [][]string{{"secret"}, {"sub"}} {
-		res := s.callGroup(context.Background(), &tool, args, nil)
+		res := s.callTool(context.Background(), &tool, args, nil)
 		if res["isError"] == true {
 			t.Errorf("args %v should fall back to help, not exec/error", args)
 		}

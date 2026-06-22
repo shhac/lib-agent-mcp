@@ -115,15 +115,15 @@ func TestToolAnnotations(t *testing.T) {
 	if by["item_get"].Annotations["readOnlyHint"] != true {
 		t.Error("item_get should carry readOnlyHint")
 	}
-	// --yes flag → destructiveHint AND inject.
-	if by["item_delete"].Annotations["destructiveHint"] != true || !by["item_delete"].injectConfirm {
-		t.Error("item_delete should be destructiveHint + injectConfirm")
+	// --yes flag → destructiveHint AND --yes injected on a confirmed call.
+	if by["item_delete"].Annotations["destructiveHint"] != true || !commandConfirms(by["item_delete"].cmd) {
+		t.Error("item_delete should be destructiveHint + confirm-injectable")
 	}
 	// mcp.destructive annotation, no --yes flag → destructiveHint but NO inject.
 	if by["config_set"].Annotations["destructiveHint"] != true {
 		t.Error("config_set should carry destructiveHint")
 	}
-	if by["config_set"].injectConfirm {
+	if commandConfirms(by["config_set"].cmd) {
 		t.Error("config_set has no --yes flag; must NOT inject --yes")
 	}
 }

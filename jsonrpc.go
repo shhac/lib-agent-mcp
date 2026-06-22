@@ -123,26 +123,29 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 	for _, a := range p.Arguments.Args {
 		args = append(args, toArg(a))
 	}
-	if tool.group {
-		return s.callGroup(ctx, tool, args, p.Arguments.Options), nil
-	}
-	return translate(s.run(ctx, tool, args, p.Arguments.Options, tool.injectConfirm)), nil
+	return s.callTool(ctx, tool, args, p.Arguments.Options), nil
 }
 
-// callGroup dispatches a group tool: an empty/"help"/unknown subcommand returns
-// the generated usage; a valid subcommand is run, injecting --yes when that
-// specific subcommand is destructive (the host has already confirmed).
-func (s *Server) callGroup(ctx context.Context, tool *Tool, args []string, opts map[string]any) map[string]any {
-	if len(args) == 0 || args[0] == "help" {
-		return helpResult(s.groupHelp(tool.cmd))
+// callTool dispatches one tool call. A leaf runs its command directly. A group
+// resolves the named subcommand, with a "help" verb that also catches an empty
+// or unknown subcommand. The command that actually runs (the leaf itself, or the
+// resolved subcommand) is the one whose --yes presence decides injection — the
+// confirm decision is made here at call time for both shapes, never stored.
+func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts map[string]any) map[string]any {
+	target := tool.cmd
+	if tool.group {
+		if len(args) == 0 || args[0] == "help" {
+			return helpResult(s.groupHelp(tool.cmd))
+		}
+		found, _, err := tool.cmd.Find(args)
+		if err != nil || found == tool.cmd || excluded(found) || !found.Runnable() {
+			return helpResult(fmt.Sprintf("unknown subcommand %q\n\n%s", args[0], s.groupHelp(tool.cmd)))
+		}
+		target = found
 	}
-	target, _, err := tool.cmd.Find(args)
-	if err != nil || target == tool.cmd || excluded(target) || !target.Runnable() {
-		return helpResult(fmt.Sprintf("unknown subcommand %q\n\n%s", args[0], s.groupHelp(tool.cmd)))
-	}
-	// Inject --yes only when the subcommand actually defines it (host has already
-	// confirmed). A command marked mcp.destructive but lacking a --yes flag still
-	// surfaces destructiveHint on the tool, but must not receive an unknown flag.
+	// Inject --yes only when the resolved command actually defines it (host has
+	// already confirmed). A command marked mcp.destructive but lacking a --yes
+	// flag still surfaces destructiveHint, but must not receive an unknown flag.
 	return translate(s.run(ctx, tool, args, opts, commandConfirms(target)))
 }
 
