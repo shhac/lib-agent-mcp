@@ -143,8 +143,7 @@ func (s *Server) callGroup(ctx context.Context, tool *Tool, args []string, opts 
 	// Inject --yes only when the subcommand actually defines it (host has already
 	// confirmed). A command marked mcp.destructive but lacking a --yes flag still
 	// surfaces destructiveHint on the tool, but must not receive an unknown flag.
-	injectConfirm := target.Flags().Lookup("yes") != nil
-	return translate(s.run(ctx, tool, args, opts, injectConfirm))
+	return translate(s.run(ctx, tool, args, opts, commandConfirms(target)))
 }
 
 // helpResult wraps usage text as a non-error tool result.

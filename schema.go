@@ -15,10 +15,10 @@ type Tool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	Annotations map[string]any `json:"annotations,omitempty"`
 
-	path          []string        // command path relative to root, e.g. ["item", "get"]
-	injectConfirm bool            // leaf: command has a --yes flag → inject it when called
-	group         bool            // group tool: dispatch subcommands via args[0] + "help" verb
-	cmd           *cobra.Command  // the cobra command (group or leaf) this tool maps to
+	path          []string       // command path relative to root, e.g. ["item", "get"]
+	injectConfirm bool           // leaf: command has a --yes flag → inject it when called
+	group         bool           // group tool: dispatch subcommands via args[0] + "help" verb
+	cmd           *cobra.Command // the cobra command (group or leaf) this tool maps to
 }
 
 var skipCommands = map[string]bool{
@@ -45,10 +45,7 @@ func (s *Server) buildLegacyTools() []Tool {
 	var tools []Tool
 	var walk func(cmd *cobra.Command)
 	walk = func(cmd *cobra.Command) {
-		for _, sub := range cmd.Commands() {
-			if excluded(sub) {
-				continue
-			}
+		for _, sub := range visibleSubs(cmd) {
 			if sub.Runnable() {
 				tools = append(tools, s.toolFor(sub))
 			}
@@ -67,12 +64,9 @@ func (s *Server) buildExposedTools() []Tool {
 	var tools []Tool
 	var walk func(cmd *cobra.Command)
 	walk = func(cmd *cobra.Command) {
-		for _, sub := range cmd.Commands() {
-			if excluded(sub) {
-				continue
-			}
+		for _, sub := range visibleSubs(cmd) {
 			if sub.Annotations[AnnotationExpose] == "true" {
-				if s.hasRunnableSub(sub) {
+				if hasRunnableSub(sub) {
 					tools = append(tools, s.toolForGroup(sub))
 				} else if sub.Runnable() {
 					tools = append(tools, s.toolFor(sub))
@@ -91,37 +85,59 @@ func excluded(cmd *cobra.Command) bool {
 	return cmd.Hidden || skipCommands[cmd.Name()] || cmd.Annotations[AnnotationSkip] == "true"
 }
 
-func (s *Server) anyExposed() bool {
-	found := false
-	var walk func(cmd *cobra.Command)
-	walk = func(cmd *cobra.Command) {
-		for _, sub := range cmd.Commands() {
-			if found {
-				return
-			}
-			if sub.Annotations[AnnotationExpose] == "true" {
-				found = true
-				return
-			}
-			walk(sub)
+// visibleSubs returns cmd's immediate subcommands that aren't excluded from the
+// tool surface. It is the single definition of "the commands a walk should see",
+// so the exclusion filter can't drift across the several callers that walk the
+// tree.
+func visibleSubs(cmd *cobra.Command) []*cobra.Command {
+	subs := cmd.Commands()
+	kept := subs[:0:0]
+	for _, sub := range subs {
+		if !excluded(sub) {
+			kept = append(kept, sub)
 		}
 	}
-	walk(s.root)
-	return found
+	return kept
 }
 
-// hasRunnableSub reports whether cmd has at least one reachable runnable
-// subcommand (so it should be a group tool rather than a leaf tool).
-func (s *Server) hasRunnableSub(cmd *cobra.Command) bool {
-	for _, sub := range cmd.Commands() {
-		if excluded(sub) {
-			continue
-		}
-		if sub.Runnable() || s.hasRunnableSub(sub) {
+// anyCommand reports whether pred holds for any command reachable from cmd
+// (descending through visible subcommands), short-circuiting on the first match.
+func anyCommand(cmd *cobra.Command, pred func(*cobra.Command) bool) bool {
+	for _, sub := range visibleSubs(cmd) {
+		if pred(sub) || anyCommand(sub, pred) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Server) anyExposed() bool {
+	return anyCommand(s.root, isExposed)
+}
+
+// isExposed reports whether cmd is marked as an MCP tool boundary.
+func isExposed(cmd *cobra.Command) bool {
+	return cmd.Annotations[AnnotationExpose] == "true"
+}
+
+// commandConfirms reports whether cmd defines a --yes confirmation flag — the
+// single signal for "inject --yes on a host-confirmed call". Both schema
+// generation and call-time dispatch read this one predicate so they can't drift.
+func commandConfirms(cmd *cobra.Command) bool {
+	return cmd.Flags().Lookup("yes") != nil
+}
+
+// commandDestructive reports whether cmd should carry destructiveHint: it either
+// gates itself with --yes or is annotated mcp.destructive. Broader than
+// commandConfirms — a command can be destructive without a --yes flag to inject.
+func commandDestructive(cmd *cobra.Command) bool {
+	return commandConfirms(cmd) || cmd.Annotations[AnnotationDestructive] == "true"
+}
+
+// hasRunnableSub reports whether cmd has at least one reachable runnable
+// subcommand (so it should be a group tool rather than a leaf tool).
+func hasRunnableSub(cmd *cobra.Command) bool {
+	return anyCommand(cmd, (*cobra.Command).Runnable)
 }
 
 func (s *Server) toolFor(cmd *cobra.Command) Tool {
@@ -134,40 +150,23 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 
 	optionProps := map[string]any{}
 	var optionRequired []string
-	annotatedDestructive := cmd.Annotations[AnnotationDestructive] == "true"
 
 	// Local flags plus inherited persistent flags, so a domain-level persistent
 	// flag (e.g. a root --project / --workspace / --profile) is a usable tool
 	// input; the noisy infra globals (format/debug/timeout/help and any
-	// WithHiddenFlags) are dropped by the hidden-flag filter.
-	hasConfirm := s.visitFlags(cmd, func(f *pflag.Flag, required bool) {
+	// WithHiddenFlags) and --yes are dropped by the flag filter.
+	s.visitFlags(cmd, func(f *pflag.Flag, required bool) {
 		optionProps[f.Name] = flagSchema(f)
 		if required {
 			optionRequired = append(optionRequired, f.Name)
 		}
 	})
 
-	// destructiveHint is the broader signal (host should confirm); injecting
-	// --yes only makes sense when the command actually defines that flag.
-	destructive := hasConfirm || annotatedDestructive
-
-	optionsSchema := map[string]any{
-		"type":       "object",
-		"properties": optionProps,
-	}
-	if len(optionRequired) > 0 {
-		optionsSchema["required"] = optionRequired
-	}
-
 	input := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"args": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": positionalDescription(cmd),
-			},
-			"options": optionsSchema,
+			"args":    argsArraySchema(positionalDescription(cmd)),
+			"options": optionsObjectSchema(optionProps, optionRequired),
 		},
 	}
 
@@ -175,7 +174,7 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 	if cmd.Annotations[AnnotationReadOnly] == "true" {
 		annotations["readOnlyHint"] = true
 	}
-	if destructive {
+	if commandDestructive(cmd) {
 		annotations["destructiveHint"] = true
 	}
 
@@ -184,7 +183,7 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 		Description:   desc,
 		InputSchema:   input,
 		path:          parts,
-		injectConfirm: hasConfirm,
+		injectConfirm: commandConfirms(cmd),
 		cmd:           cmd,
 	}
 	if len(annotations) > 0 {
@@ -204,48 +203,46 @@ func commandPathParts(cmd *cobra.Command) []string {
 }
 
 // visitFlags calls fn for each schema-visible flag of cmd — local plus inherited
-// persistent, de-duped, minus hidden/infra flags and --yes. It returns whether
-// cmd defines a --yes confirm flag (so the caller can inject it on a host-
-// confirmed call).
-func (s *Server) visitFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) bool {
-	hasConfirm := false
+// persistent, de-duped, minus the flags flagSkipped hides (infra globals, --yes,
+// mcp.hidden).
+func (s *Server) visitFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) {
 	seen := map[string]bool{}
 	visit := func(f *pflag.Flag) {
-		if f.Name == "yes" {
-			hasConfirm = true
-			return
-		}
-		if s.flagHidden(f) || seen[f.Name] {
+		if s.flagSkipped(f) || seen[f.Name] {
 			return
 		}
 		seen[f.Name] = true
-		_, required := f.Annotations[cobra.BashCompOneRequiredFlag]
-		fn(f, required)
+		fn(f, flagRequired(f))
 	}
 	cmd.LocalFlags().VisitAll(visit)
 	cmd.InheritedFlags().VisitAll(visit)
-	return hasConfirm
 }
 
-// flagHidden reports whether a flag is kept out of every schema/help surface:
-// cobra-hidden, an infra global (format/debug/timeout/help or WithHiddenFlags),
-// or marked mcp.hidden.
-func (s *Server) flagHidden(f *pflag.Flag) bool {
-	return f.Hidden || s.opts.hiddenFlags[f.Name] || f.Annotations[AnnotationFlagHidden] != nil
-}
-
-// visitLocalFlags visits a command's own (non-inherited) flags only, applying
-// the same hidden filter and skipping --yes. Group help uses it so each
-// subcommand line shows just its distinctive flags; the flags every subcommand
-// inherits are listed once at the group level instead.
+// visitLocalFlags visits a command's own (non-inherited) schema-visible flags
+// only. Group help uses it so each subcommand line shows just its distinctive
+// flags; the flags every subcommand inherits are listed once at the group level.
 func (s *Server) visitLocalFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) {
 	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
-		if f.Name == "yes" || s.flagHidden(f) {
+		if s.flagSkipped(f) {
 			return
 		}
-		_, required := f.Annotations[cobra.BashCompOneRequiredFlag]
-		fn(f, required)
+		fn(f, flagRequired(f))
 	})
+}
+
+// flagSkipped reports whether a flag is kept out of every schema/help surface:
+// the --yes confirm flag (the bridge injects it, the model must not set it),
+// cobra-hidden flags, infra globals (format/debug/timeout/help or
+// WithHiddenFlags), or flags marked mcp.hidden.
+func (s *Server) flagSkipped(f *pflag.Flag) bool {
+	return f.Name == "yes" || f.Hidden || s.opts.hiddenFlags[f.Name] ||
+		f.Annotations[AnnotationFlagHidden] != nil
+}
+
+// flagRequired reports whether cobra marked f as a required flag.
+func flagRequired(f *pflag.Flag) bool {
+	_, required := f.Annotations[cobra.BashCompOneRequiredFlag]
+	return required
 }
 
 // toolForGroup builds a coarse tool for an exposed group command: one tool that
@@ -258,7 +255,7 @@ func (s *Server) toolForGroup(group *cobra.Command) Tool {
 	name := strings.Join(parts, s.opts.nameSeparator)
 
 	desc := strings.TrimSpace(group.Short)
-	if subs := s.subNames(group); len(subs) > 0 {
+	if subs := subNames(group); len(subs) > 0 {
 		desc = strings.TrimSpace(desc + " — subcommands: " + strings.Join(subs, ", ") +
 			`. Call with args:["<subcommand>", …]; use args:["help"] for full usage and flags.`)
 	}
@@ -266,12 +263,8 @@ func (s *Server) toolForGroup(group *cobra.Command) Tool {
 	input := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"args": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string"},
-				"description": `The subcommand and its arguments/flags, e.g. ["get","ENG-123"] or ` +
-					`["create","--title","X"]. Use ["help"] to list subcommands and flags.`,
-			},
+			"args": argsArraySchema(`The subcommand and its arguments/flags, e.g. ["get","ENG-123"] or ` +
+				`["create","--title","X"]. Use ["help"] to list subcommands and flags.`),
 		},
 		"required": []string{"args"},
 	}
@@ -284,19 +277,17 @@ func (s *Server) toolForGroup(group *cobra.Command) Tool {
 		group:       true,
 		cmd:         group,
 	}
-	if s.groupHasDestructive(group) {
+	if groupHasDestructive(group) {
 		t.Annotations = map[string]any{"destructiveHint": true}
 	}
 	return t
 }
 
-// subNames lists the immediate runnable/visible subcommand names of cmd.
-func (s *Server) subNames(cmd *cobra.Command) []string {
-	var names []string
-	for _, sub := range cmd.Commands() {
-		if excluded(sub) {
-			continue
-		}
+// subNames lists the immediate visible subcommand names of cmd.
+func subNames(cmd *cobra.Command) []string {
+	subs := visibleSubs(cmd)
+	names := make([]string, 0, len(subs))
+	for _, sub := range subs {
 		names = append(names, sub.Name())
 	}
 	return names
@@ -304,19 +295,8 @@ func (s *Server) subNames(cmd *cobra.Command) []string {
 
 // groupHasDestructive reports whether any reachable subcommand of group is
 // destructive (defines --yes or is annotated destructive).
-func (s *Server) groupHasDestructive(group *cobra.Command) bool {
-	for _, sub := range group.Commands() {
-		if excluded(sub) {
-			continue
-		}
-		if sub.Annotations[AnnotationDestructive] == "true" || sub.Flags().Lookup("yes") != nil {
-			return true
-		}
-		if s.groupHasDestructive(sub) {
-			return true
-		}
-	}
-	return false
+func groupHasDestructive(group *cobra.Command) bool {
+	return anyCommand(group, commandDestructive)
 }
 
 // groupHelp renders the usage for an exposed group: each subcommand with its
@@ -330,10 +310,10 @@ func (s *Server) groupHelp(group *cobra.Command) string {
 	// once here rather than repeated on each subcommand line below.
 	var common []string
 	group.InheritedFlags().VisitAll(func(f *pflag.Flag) {
-		if f.Name == "yes" || s.flagHidden(f) {
+		if s.flagSkipped(f) {
 			return
 		}
-		common = append(common, fmt.Sprintf("  --%s <%s>  %s", f.Name, f.Value.Type(), f.Usage))
+		common = append(common, "  "+formatFlagLine(f, false))
 	})
 	if len(common) > 0 {
 		b.WriteString("Common flags (apply to every subcommand):\n")
@@ -352,14 +332,10 @@ func (s *Server) groupHelp(group *cobra.Command) string {
 			fmt.Fprintf(&b, "%s%s — %s\n", indent, strings.TrimSpace(sub.Use), sub.Short)
 			if sub.Runnable() {
 				s.visitLocalFlags(sub, func(f *pflag.Flag, required bool) {
-					req := ""
-					if required {
-						req = " (required)"
-					}
-					fmt.Fprintf(&b, "%s    --%s <%s>  %s%s\n", indent, f.Name, f.Value.Type(), f.Usage, req)
+					fmt.Fprintf(&b, "%s    %s\n", indent, formatFlagLine(f, required))
 				})
 			}
-			if s.hasRunnableSub(sub) {
+			if hasRunnableSub(sub) {
 				render(sub, depth+1)
 			}
 		}
@@ -368,44 +344,12 @@ func (s *Server) groupHelp(group *cobra.Command) string {
 	return b.String()
 }
 
-func positionalDescription(cmd *cobra.Command) string {
-	use := strings.TrimSpace(cmd.Use)
-	if i := strings.IndexByte(use, ' '); i >= 0 {
-		return "Positional arguments: " + strings.TrimSpace(use[i+1:])
+// formatFlagLine renders one flag as "--name <type>  usage", with a trailing
+// " (required)" when required. Callers prepend their own indentation.
+func formatFlagLine(f *pflag.Flag, required bool) string {
+	req := ""
+	if required {
+		req = " (required)"
 	}
-	return "Positional arguments"
-}
-
-func flagSchema(f *pflag.Flag) map[string]any {
-	schema := map[string]any{"description": f.Usage}
-	switch t := f.Value.Type(); t {
-	case "bool":
-		schema["type"] = "boolean"
-	case "int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64", "count":
-		schema["type"] = "integer"
-	case "float32", "float64":
-		schema["type"] = "number"
-	default:
-		if strings.HasSuffix(t, "Slice") || strings.HasSuffix(t, "Array") {
-			schema["type"] = "array"
-			schema["items"] = map[string]any{"type": sliceItemType(t)}
-		} else {
-			schema["type"] = "string"
-		}
-	}
-	return schema
-}
-
-func sliceItemType(flagType string) string {
-	switch {
-	case strings.HasPrefix(flagType, "bool"):
-		return "boolean"
-	case strings.HasPrefix(flagType, "int"), strings.HasPrefix(flagType, "uint"):
-		return "integer"
-	case strings.HasPrefix(flagType, "float"):
-		return "number"
-	default:
-		return "string"
-	}
+	return fmt.Sprintf("--%s <%s>  %s%s", f.Name, f.Value.Type(), f.Usage, req)
 }
