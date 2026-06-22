@@ -1,6 +1,7 @@
 package agentmcp
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -139,9 +140,33 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 		Short:       "Run as an MCP server over stdio",
 		Annotations: map[string]string{AnnotationSkip: "true"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
+			// any non-protocol byte there would corrupt the client's parser.
+			fmt.Fprintln(os.Stderr, s.startupBanner())
 			return s.Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},
 	}
+}
+
+// startupBanner is the one-line notice written to stderr when the server boots,
+// so an operator watching the process sees that it came up, what it is, and how
+// it's listening. The transport is stdio (stdin/stdout pipes), so there is no
+// port to report; a future network transport would name its address here.
+func (s *Server) startupBanner() string {
+	name := s.opts.name
+	if name == "" {
+		name = "mcp"
+	}
+	version := s.opts.version
+	if version == "" {
+		version = "dev"
+	}
+	tools := "tools"
+	if len(s.tools) == 1 {
+		tools = "tool"
+	}
+	return fmt.Sprintf("%s %s — MCP server ready · transport: stdio · %d %s · protocol %s",
+		name, version, len(s.tools), tools, defaultProtocolVersion)
 }
 
 func rootVersion(root *cobra.Command) string {

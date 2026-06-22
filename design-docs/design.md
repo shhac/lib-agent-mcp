@@ -64,6 +64,13 @@ root.AddCommand(agentmcp.Command(root)) // adds `mycli mcp`
 `mycli mcp` serves the tree over stdio. Options: `WithName`, `WithVersion`,
 `WithNameSeparator`, `WithHiddenFlags`, `WithExecutable`.
 
+On boot it writes a one-line banner (name, version, transport, tool count,
+protocol) to **stderr**, so an operator watching the process sees it came up.
+Deliberately stderr, never stdout: stdout *is* the JSON-RPC stream and any
+non-protocol byte there would corrupt the client's parser. There is no port to
+report — the transport is stdin/stdout pipes; a future network transport would
+name its address in the banner instead.
+
 ## Tool generation (cobra tree → MCP tools)
 
 Two modes, chosen automatically by whether anything in the tree is `Expose`d:
