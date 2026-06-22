@@ -124,3 +124,103 @@ func TestLegacyFallback(t *testing.T) {
 		t.Error("legacy mode should still emit per-leaf tools like item_get")
 	}
 }
+
+// TestCallGroup_SkipAndNonRunnableFallToHelp — group dispatch must degrade to
+// help (never exec) when args name a Skip'd subcommand or a non-runnable
+// intermediate group, since cobra's Find returns the closest match either way.
+func TestCallGroup_SkipAndNonRunnableFallToHelp(t *testing.T) {
+	root := &cobra.Command{Use: "demo", Version: "1.0.0"}
+	grp := &cobra.Command{Use: "thing", Short: "Things"}
+	grp.AddCommand(&cobra.Command{Use: "get <id>", Short: "Get", RunE: noop})
+	skipped := &cobra.Command{Use: "secret", Short: "Secret", RunE: noop}
+	Skip(skipped)
+	nested := &cobra.Command{Use: "sub", Short: "Sub group"} // non-runnable group
+	nested.AddCommand(&cobra.Command{Use: "run", Short: "Run", RunE: noop})
+	grp.AddCommand(skipped, nested)
+	Expose(grp)
+	root.AddCommand(grp)
+
+	// A bogus executable: if dispatch ever execs instead of falling back to help,
+	// the subprocess failure would surface as isError — which these assertions
+	// catch. The help path never calls run, so it stays isError:false.
+	s := newServer(root, WithExecutable("/nonexistent/must-not-exec"))
+	var tool Tool
+	for _, tl := range s.buildTools() {
+		if tl.Name == "thing" {
+			tool = tl
+		}
+	}
+
+	for _, args := range [][]string{{"secret"}, {"sub"}} {
+		res := s.callGroup(context.Background(), &tool, args, nil)
+		if res["isError"] == true {
+			t.Errorf("args %v should fall back to help, not exec/error", args)
+		}
+		if h := helpText(res); !strings.Contains(h, "unknown subcommand") {
+			t.Errorf("args %v: expected unknown-subcommand help, got:\n%s", args, h)
+		}
+	}
+}
+
+// TestGroupHasDestructive_RecursionAndSkip — the coarse destructive hint must
+// see a --yes command nested under a sub-group, but a Skip'd subtree must mask
+// it (the subtree is invisible to the tool surface, so it can't trigger a hint).
+func TestGroupHasDestructive_RecursionAndSkip(t *testing.T) {
+	withYes := func(use string) *cobra.Command {
+		c := &cobra.Command{Use: use, Short: use, RunE: noop}
+		c.Flags().Bool("yes", false, "Confirm")
+		return c
+	}
+
+	g := &cobra.Command{Use: "g"}
+	sub := &cobra.Command{Use: "sub"}
+	sub.AddCommand(withYes("del <id>"))
+	g.AddCommand(sub)
+	if !groupHasDestructive(g) {
+		t.Error("a --yes command under a nested sub-group should make the group destructive")
+	}
+
+	g2 := &cobra.Command{Use: "g2"}
+	skippedSub := &cobra.Command{Use: "sub"}
+	skippedSub.AddCommand(withYes("del <id>"))
+	Skip(skippedSub)
+	g2.AddCommand(skippedSub)
+	if groupHasDestructive(g2) {
+		t.Error("a destructive command under a Skip'd sub-group must not surface destructiveHint")
+	}
+}
+
+// TestGroupHelp_CommonFlagsAndNesting — group help lists inherited flags once
+// under "Common flags" (not repeated per subcommand), renders nested sub-groups
+// indented, and never shows --yes.
+func TestGroupHelp_CommonFlagsAndNesting(t *testing.T) {
+	root := &cobra.Command{Use: "demo", Version: "1.0.0"}
+	root.PersistentFlags().String("workspace", "", "Workspace to operate in")
+
+	grp := &cobra.Command{Use: "thing", Short: "Things"}
+	del := &cobra.Command{Use: "delete <id>", Short: "Delete a thing", RunE: noop}
+	del.Flags().Bool("yes", false, "Confirm")
+	sub := &cobra.Command{Use: "attach", Short: "Attachment ops"}
+	subLeaf := &cobra.Command{Use: "add <url>", Short: "Add attachment", RunE: noop}
+	subLeaf.Flags().String("title", "", "Override title")
+	sub.AddCommand(subLeaf)
+	grp.AddCommand(&cobra.Command{Use: "get <id>", Short: "Get a thing", RunE: noop}, del, sub)
+	root.AddCommand(grp)
+
+	help := newServer(root).groupHelp(grp)
+
+	if !strings.Contains(help, "Common flags") || !strings.Contains(help, "--workspace") {
+		t.Errorf("group help should list inherited --workspace under Common flags:\n%s", help)
+	}
+	if n := strings.Count(help, "--workspace"); n != 1 {
+		t.Errorf("inherited --workspace should appear exactly once (common), got %d:\n%s", n, help)
+	}
+	if strings.Contains(help, "--yes") {
+		t.Errorf("--yes must never appear in group help:\n%s", help)
+	}
+	for _, want := range []string{"attach", "add <url>", "--title"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("group help missing nested %q:\n%s", want, help)
+		}
+	}
+}
