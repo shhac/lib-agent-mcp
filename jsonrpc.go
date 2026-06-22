@@ -140,7 +140,10 @@ func (s *Server) callGroup(ctx context.Context, tool *Tool, args []string, opts 
 	if err != nil || target == tool.cmd || excluded(target) || !target.Runnable() {
 		return helpResult(fmt.Sprintf("unknown subcommand %q\n\n%s", args[0], s.groupHelp(tool.cmd)))
 	}
-	injectConfirm := target.Annotations[AnnotationDestructive] == "true" || target.Flags().Lookup("yes") != nil
+	// Inject --yes only when the subcommand actually defines it (host has already
+	// confirmed). A command marked mcp.destructive but lacking a --yes flag still
+	// surfaces destructiveHint on the tool, but must not receive an unknown flag.
+	injectConfirm := target.Flags().Lookup("yes") != nil
 	return translate(s.run(ctx, tool, args, opts, injectConfirm))
 }
 

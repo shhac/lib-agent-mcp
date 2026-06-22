@@ -37,6 +37,16 @@ func Expose(cmd *cobra.Command) { setAnnotation(cmd, AnnotationExpose, "true") }
 // subcommand dispatch. MCP-only; the CLI is unaffected.
 func Skip(cmd *cobra.Command) { setAnnotation(cmd, AnnotationSkip, "true") }
 
+// Destructive marks cmd as destructive, surfacing the MCP destructiveHint so the
+// host confirms before the call. Use it for mutating commands that have no --yes
+// confirmation flag of their own; commands that DO define --yes are detected
+// automatically. MCP-only; the CLI is unaffected.
+func Destructive(cmd *cobra.Command) { setAnnotation(cmd, AnnotationDestructive, "true") }
+
+// ReadOnly marks cmd as side-effect-free, surfacing the MCP readOnlyHint.
+// MCP-only; the CLI is unaffected.
+func ReadOnly(cmd *cobra.Command) { setAnnotation(cmd, AnnotationReadOnly, "true") }
+
 func setAnnotation(cmd *cobra.Command, key, val string) {
 	if cmd.Annotations == nil {
 		cmd.Annotations = map[string]string{}

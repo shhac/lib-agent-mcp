@@ -87,6 +87,35 @@ func TestExpose_HelpVerb(t *testing.T) {
 	}
 }
 
+// TestExpose_DestructiveAnnotationWithoutYes — a subcommand marked Destructive
+// but without a --yes flag still makes its group carry destructiveHint, so the
+// host confirms; the injection path stays flag-based (tested via buildArgv) so
+// the subprocess never receives an unknown --yes flag.
+func TestExpose_DestructiveAnnotationWithoutYes(t *testing.T) {
+	root := &cobra.Command{Use: "demo", Version: "1.0.0"}
+	grp := &cobra.Command{Use: "thing", Short: "Things"}
+	purge := &cobra.Command{Use: "purge <id>", Short: "Purge a thing", RunE: noop}
+	Destructive(purge) // destructive, but defines no --yes flag
+	grp.AddCommand(purge)
+	Expose(grp)
+	root.AddCommand(grp)
+
+	s := newServer(root)
+	var tool Tool
+	for _, tl := range s.buildTools() {
+		if tl.Name == "thing" {
+			tool = tl
+		}
+	}
+	if tool.Annotations["destructiveHint"] != true {
+		t.Error("a Destructive-annotated subcommand should set the group destructiveHint")
+	}
+	// The subcommand has no --yes flag, so a host-confirmed call must NOT inject one.
+	if purge.Flags().Lookup("yes") != nil {
+		t.Fatal("test setup: purge should not define --yes")
+	}
+}
+
 // TestLegacyFallback — with no Expose anywhere, the server keeps reflect-all
 // (one tool per runnable leaf), so un-migrated CLIs are unaffected.
 func TestLegacyFallback(t *testing.T) {
