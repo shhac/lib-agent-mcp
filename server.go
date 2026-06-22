@@ -143,9 +143,55 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
 			// any non-protocol byte there would corrupt the client's parser.
 			fmt.Fprintln(os.Stderr, s.startupBanner())
+			// When a human ran this directly (a TTY on stdin, no MCP host driving
+			// it), they can't do anything useful — the server just waits for
+			// JSON-RPC. Print the config needed to register it instead, so the
+			// output is self-describing (paste-able into an LLM or a client config).
+			if stdinIsInteractive() {
+				fmt.Fprintln(os.Stderr, "\n"+s.setupHint())
+			}
 			return s.Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},
 	}
+}
+
+// stdinIsInteractive reports whether stdin is a terminal (a human typed the
+// command) rather than a pipe (an MCP host is driving the protocol). It uses a
+// dependency-free char-device check so the bridge stays lean.
+func stdinIsInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// setupHint is the registration guidance shown when the server is run by hand.
+// It emits a ready-to-paste MCP client config (the universal mcpServers shape)
+// using the server's own absolute path, plus the Claude Code one-liner — so the
+// reader (or an LLM they paste it into) has everything needed to wire it up.
+func (s *Server) setupHint() string {
+	name := s.opts.name
+	if name == "" {
+		name = "mcp"
+	}
+	exec := s.executable()
+	return fmt.Sprintf(`This is an MCP server: it speaks JSON-RPC over stdin/stdout and is meant to be
+launched by an MCP client, not run by hand. To register it, add this to your MCP
+client config (Claude Desktop / Cursor / VS Code / Windsurf / …):
+
+    {
+      "mcpServers": {
+        %q: {
+          "command": %q,
+          "args": ["mcp"]
+        }
+      }
+    }
+
+…or, with the Claude Code CLI:
+
+    claude mcp add %s -- %s mcp
+
+Now waiting for an MCP client to connect on stdin — press Ctrl-C to exit.`,
+		name, exec, name, exec)
 }
 
 // startupBanner is the one-line notice written to stderr when the server boots,

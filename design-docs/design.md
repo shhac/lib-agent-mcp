@@ -71,6 +71,14 @@ non-protocol byte there would corrupt the client's parser. There is no port to
 report — the transport is stdin/stdout pipes; a future network transport would
 name its address in the banner instead.
 
+When stdin is a **TTY** (a human ran `mycli mcp` by hand rather than a host
+spawning it over a pipe), the banner is followed by a registration hint: a
+ready-to-paste `mcpServers` config using the binary's own absolute path plus the
+`claude mcp add` one-liner. Running the server directly otherwise just hangs
+waiting for JSON-RPC, so the self-describing output is what a confused human — or
+an LLM they paste it into — needs to actually wire it up. Gated on the TTY check
+so host-spawned runs (piped stdin) stay quiet.
+
 ## Tool generation (cobra tree → MCP tools)
 
 Two modes, chosen automatically by whether anything in the tree is `Expose`d:
