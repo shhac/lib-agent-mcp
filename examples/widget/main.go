@@ -77,7 +77,17 @@ func main() {
 	root.PersistentFlags().StringP("format", "f", "", "Output format: json, jsonl")
 	root.PersistentFlags().Bool("debug", false, "Enable debug logging") // infra flag; hidden by the bridge
 
-	root.AddCommand(itemCommand(), configCommand(), adminCommand())
+	item, config := itemCommand(), configCommand()
+	root.AddCommand(item, config, adminCommand())
+
+	// WIDGET_EXPOSE flips the demo to the opt-in surface so one binary covers
+	// both bridge modes: unset → legacy reflect-all (one tool per leaf); set →
+	// item and config become coarse group tools. The e2e tests drive each mode.
+	if os.Getenv("WIDGET_EXPOSE") != "" {
+		agentmcp.Expose(item)
+		agentmcp.Expose(config)
+	}
+
 	root.AddCommand(agentmcp.Command(root))
 
 	if err := root.Execute(); err != nil {
