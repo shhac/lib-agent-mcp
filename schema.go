@@ -215,10 +215,7 @@ func (s *Server) visitFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required 
 			hasConfirm = true
 			return
 		}
-		if f.Hidden || s.opts.hiddenFlags[f.Name] || f.Annotations[AnnotationFlagHidden] != nil {
-			return
-		}
-		if seen[f.Name] {
+		if s.flagHidden(f) || seen[f.Name] {
 			return
 		}
 		seen[f.Name] = true
@@ -228,6 +225,27 @@ func (s *Server) visitFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required 
 	cmd.LocalFlags().VisitAll(visit)
 	cmd.InheritedFlags().VisitAll(visit)
 	return hasConfirm
+}
+
+// flagHidden reports whether a flag is kept out of every schema/help surface:
+// cobra-hidden, an infra global (format/debug/timeout/help or WithHiddenFlags),
+// or marked mcp.hidden.
+func (s *Server) flagHidden(f *pflag.Flag) bool {
+	return f.Hidden || s.opts.hiddenFlags[f.Name] || f.Annotations[AnnotationFlagHidden] != nil
+}
+
+// visitLocalFlags visits a command's own (non-inherited) flags only, applying
+// the same hidden filter and skipping --yes. Group help uses it so each
+// subcommand line shows just its distinctive flags; the flags every subcommand
+// inherits are listed once at the group level instead.
+func (s *Server) visitLocalFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) {
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name == "yes" || s.flagHidden(f) {
+			return
+		}
+		_, required := f.Annotations[cobra.BashCompOneRequiredFlag]
+		fn(f, required)
+	})
 }
 
 // toolForGroup builds a coarse tool for an exposed group command: one tool that
@@ -307,6 +325,22 @@ func (s *Server) groupHasDestructive(group *cobra.Command) bool {
 func (s *Server) groupHelp(group *cobra.Command) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s — %s\n\n", strings.Join(commandPathParts(group), " "), group.Short)
+
+	// Flags every subcommand inherits (e.g. domain persistent flags) are listed
+	// once here rather than repeated on each subcommand line below.
+	var common []string
+	group.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name == "yes" || s.flagHidden(f) {
+			return
+		}
+		common = append(common, fmt.Sprintf("  --%s <%s>  %s", f.Name, f.Value.Type(), f.Usage))
+	})
+	if len(common) > 0 {
+		b.WriteString("Common flags (apply to every subcommand):\n")
+		b.WriteString(strings.Join(common, "\n"))
+		b.WriteString("\n\n")
+	}
+
 	b.WriteString("Subcommands (pass as args, e.g. args:[\"get\",\"ENG-123\"]):\n")
 	var render func(cmd *cobra.Command, depth int)
 	render = func(cmd *cobra.Command, depth int) {
@@ -317,7 +351,7 @@ func (s *Server) groupHelp(group *cobra.Command) string {
 			indent := strings.Repeat("  ", depth+1)
 			fmt.Fprintf(&b, "%s%s — %s\n", indent, strings.TrimSpace(sub.Use), sub.Short)
 			if sub.Runnable() {
-				s.visitFlags(sub, func(f *pflag.Flag, required bool) {
+				s.visitLocalFlags(sub, func(f *pflag.Flag, required bool) {
 					req := ""
 					if required {
 						req = " (required)"
