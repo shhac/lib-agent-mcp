@@ -27,14 +27,11 @@ func optInRoot() *cobra.Command {
 	return root
 }
 
-func helpText(res map[string]any) string {
-	content, _ := res["content"].([]any)
-	if len(content) == 0 {
+func helpText(res toolResult) string {
+	if len(res.Content) == 0 {
 		return ""
 	}
-	block, _ := content[0].(map[string]any)
-	text, _ := block["text"].(string)
-	return text
+	return res.Content[0].Text
 }
 
 func TestExpose_GroupTool(t *testing.T) {
@@ -153,7 +150,7 @@ func TestCallGroup_SkipAndNonRunnableFallToHelp(t *testing.T) {
 
 	for _, args := range [][]string{{"secret"}, {"sub"}} {
 		res := s.callTool(context.Background(), &tool, args, nil)
-		if res["isError"] == true {
+		if res.IsError {
 			t.Errorf("args %v should fall back to help, not exec/error", args)
 		}
 		if h := helpText(res); !strings.Contains(h, "unknown subcommand") {

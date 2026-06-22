@@ -71,10 +71,10 @@ func TestRunStartFailureDegrades(t *testing.T) {
 		t.Error("start failure should surface an error on stderr")
 	}
 	out := translate(res)
-	if out["isError"] != true {
-		t.Errorf("translate of a failed run should be isError, got %v", out["isError"])
+	if !out.IsError {
+		t.Error("translate of a failed run should be isError")
 	}
-	if content, _ := out["content"].([]any); len(content) == 0 {
+	if len(out.Content) == 0 {
 		t.Error("translate should still emit a text content block on start failure")
 	}
 }

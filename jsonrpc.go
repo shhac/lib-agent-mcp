@@ -102,7 +102,7 @@ func (s *Server) handleInitialize(params json.RawMessage) map[string]any {
 	}
 }
 
-func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (map[string]any, *rpcError) {
+func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (toolResult, *rpcError) {
 	var p struct {
 		Name      string `json:"name"`
 		Arguments struct {
@@ -111,12 +111,12 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 		} `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, &rpcError{Code: -32602, Message: "invalid params: " + err.Error()}
+		return toolResult{}, &rpcError{Code: -32602, Message: "invalid params: " + err.Error()}
 	}
 
 	tool := s.toolsByName[p.Name]
 	if tool == nil {
-		return nil, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
+		return toolResult{}, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
 	}
 
 	args := make([]string, 0, len(p.Arguments.Args))
@@ -131,7 +131,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 // or unknown subcommand. The command that actually runs (the leaf itself, or the
 // resolved subcommand) is the one whose --yes presence decides injection — the
 // confirm decision is made here at call time for both shapes, never stored.
-func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts map[string]any) map[string]any {
+func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts map[string]any) toolResult {
 	target := tool.cmd
 	if tool.group {
 		if len(args) == 0 || args[0] == "help" {
@@ -150,9 +150,6 @@ func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts m
 }
 
 // helpResult wraps usage text as a non-error tool result.
-func helpResult(text string) map[string]any {
-	return map[string]any{
-		"content": []any{textContent(text)},
-		"isError": false,
-	}
+func helpResult(text string) toolResult {
+	return toolResult{Content: []contentBlock{textBlock(text)}, IsError: false}
 }

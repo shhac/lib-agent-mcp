@@ -9,21 +9,23 @@ func TestTranslateSuccessRecordsAndMeta(t *testing.T) {
 			`{"@pagination":{"has_more":true}}` + "\n")}
 
 	res := translate(r)
-	if res["isError"].(bool) {
+	if res.IsError {
 		t.Fatal("unexpected isError")
 	}
-	sc := res["structuredContent"].(map[string]any)
-	if got := len(sc["records"].([]any)); got != 2 {
+	sc := res.StructuredContent
+	if sc == nil {
+		t.Fatal("missing structuredContent")
+	}
+	if got := len(sc.Records); got != 2 {
 		t.Errorf("records = %d, want 2", got)
 	}
-	meta, ok := sc["meta"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing meta: %v", sc)
+	if sc.Meta == nil {
+		t.Fatalf("missing meta: %+v", sc)
 	}
-	if _, ok := meta["@pagination"]; !ok {
+	if _, ok := sc.Meta["@pagination"]; !ok {
 		t.Error("@pagination not captured as metadata")
 	}
-	if len(res["content"].([]any)) == 0 {
+	if len(res.Content) == 0 {
 		t.Error("expected a text content fallback")
 	}
 }
@@ -34,19 +36,17 @@ func TestTranslateErrorSurfacesFixableBy(t *testing.T) {
 		exitCode: 1,
 	}
 	res := translate(r)
-	if !res["isError"].(bool) {
+	if !res.IsError {
 		t.Fatal("expected isError for non-zero exit")
 	}
-	sc := res["structuredContent"].(map[string]any)
-	errObj, ok := sc["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing structured error: %v", sc)
+	errObj := res.StructuredContent.Error
+	if errObj == nil {
+		t.Fatalf("missing structured error: %+v", res.StructuredContent)
 	}
 	if errObj["fixable_by"] != "agent" {
 		t.Errorf("fixable_by = %v, want agent", errObj["fixable_by"])
 	}
-	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if text == "" {
+	if res.Content[0].Text == "" {
 		t.Error("error text content should be non-empty")
 	}
 }
@@ -54,12 +54,10 @@ func TestTranslateErrorSurfacesFixableBy(t *testing.T) {
 func TestTranslateNonJSONStdoutDegradesToText(t *testing.T) {
 	r := runResult{stdout: []byte("not json at all\nstill not json\n")}
 	res := translate(r)
-	sc := res["structuredContent"].(map[string]any)
-	if got := len(sc["records"].([]any)); got != 0 {
+	if got := len(res.StructuredContent.Records); got != 0 {
 		t.Errorf("records = %d, want 0 for non-JSON output", got)
 	}
-	text := res["content"].([]any)[0].(map[string]any)["text"].(string)
-	if text == "" {
+	if res.Content[0].Text == "" {
 		t.Error("raw stdout should survive as text content")
 	}
 }
@@ -70,13 +68,12 @@ func TestTranslateCapturesMultipleMetaKeys(t *testing.T) {
 			`{"@pagination":{"has_more":false}}` + "\n" +
 			`{"@counts":{"n":1}}` + "\n")}
 	res := translate(r)
-	sc := res["structuredContent"].(map[string]any)
-	if got := len(sc["records"].([]any)); got != 1 {
+	sc := res.StructuredContent
+	if got := len(sc.Records); got != 1 {
 		t.Errorf("records = %d, want 1", got)
 	}
-	meta := sc["meta"].(map[string]any)
 	for _, k := range []string{"@pagination", "@counts"} {
-		if _, ok := meta[k]; !ok {
+		if _, ok := sc.Meta[k]; !ok {
 			t.Errorf("missing meta key %q", k)
 		}
 	}
@@ -88,10 +85,10 @@ func TestTranslateSuccessAppendsStderrNotice(t *testing.T) {
 		stderr: []byte(`{"notice":"compact projection"}` + "\n"),
 	}
 	res := translate(r)
-	if res["isError"].(bool) {
+	if res.IsError {
 		t.Fatal("notice on stderr must not make a success a failure")
 	}
-	if got := len(res["content"].([]any)); got != 2 {
+	if got := len(res.Content); got != 2 {
 		t.Errorf("content blocks = %d, want 2 (records + notice)", got)
 	}
 }
