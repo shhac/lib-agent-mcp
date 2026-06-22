@@ -29,7 +29,7 @@ func TestRenderFlag(t *testing.T) {
 
 func TestBuildArgv(t *testing.T) {
 	tool := &Tool{path: []string{"item", "delete"}, injectConfirm: true}
-	got := buildArgv(tool, []string{"w-1"}, map[string]any{"force": true, "limit": float64(5)})
+	got := buildArgv(tool, []string{"w-1"}, map[string]any{"force": true, "limit": float64(5)}, true)
 	want := []string{"item", "delete", "--force=true", "--limit=5", "w-1", "--yes", "--format", "jsonl"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("buildArgv = %v, want %v", got, want)
@@ -38,7 +38,7 @@ func TestBuildArgv(t *testing.T) {
 
 func TestBuildArgvNoOptionsNoConfirm(t *testing.T) {
 	tool := &Tool{path: []string{"item", "list"}}
-	got := buildArgv(tool, nil, nil)
+	got := buildArgv(tool, nil, nil, false)
 	want := []string{"item", "list", "--format", "jsonl"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("buildArgv = %v, want %v", got, want)

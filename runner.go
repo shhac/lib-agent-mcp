@@ -18,8 +18,8 @@ type runResult struct {
 // run executes the tool's command as a subprocess of the same binary, forcing
 // NDJSON output and injecting --yes for gated (destructive) commands, since
 // confirmation has already happened at the MCP host layer.
-func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[string]any) runResult {
-	cmd := exec.CommandContext(ctx, s.executable(), buildArgv(tool, args, opts)...)
+func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[string]any, injectConfirm bool) runResult {
+	cmd := exec.CommandContext(ctx, s.executable(), buildArgv(tool, args, opts, injectConfirm)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -53,13 +53,13 @@ func (s *Server) executable() string {
 // command path, then options (sorted for deterministic output), then positional
 // args, then an injected --yes for confirm-gated commands, and finally
 // --format jsonl to force the NDJSON contract.
-func buildArgv(tool *Tool, args []string, opts map[string]any) []string {
+func buildArgv(tool *Tool, args []string, opts map[string]any, injectConfirm bool) []string {
 	argv := append([]string{}, tool.path...)
 	for _, name := range sortedOptionKeys(opts) {
 		argv = append(argv, renderFlag(name, opts[name])...)
 	}
 	argv = append(argv, args...)
-	if tool.injectConfirm {
+	if injectConfirm {
 		argv = append(argv, "--yes")
 	}
 	return append(argv, "--format", "jsonl")

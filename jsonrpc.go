@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"sync"
 )
@@ -122,5 +123,31 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 	for _, a := range p.Arguments.Args {
 		args = append(args, toArg(a))
 	}
-	return translate(s.run(ctx, tool, args, p.Arguments.Options)), nil
+	if tool.group {
+		return s.callGroup(ctx, tool, args, p.Arguments.Options), nil
+	}
+	return translate(s.run(ctx, tool, args, p.Arguments.Options, tool.injectConfirm)), nil
+}
+
+// callGroup dispatches a group tool: an empty/"help"/unknown subcommand returns
+// the generated usage; a valid subcommand is run, injecting --yes when that
+// specific subcommand is destructive (the host has already confirmed).
+func (s *Server) callGroup(ctx context.Context, tool *Tool, args []string, opts map[string]any) map[string]any {
+	if len(args) == 0 || args[0] == "help" {
+		return helpResult(s.groupHelp(tool.cmd))
+	}
+	target, _, err := tool.cmd.Find(args)
+	if err != nil || target == tool.cmd || excluded(target) || !target.Runnable() {
+		return helpResult(fmt.Sprintf("unknown subcommand %q\n\n%s", args[0], s.groupHelp(tool.cmd)))
+	}
+	injectConfirm := target.Annotations[AnnotationDestructive] == "true" || target.Flags().Lookup("yes") != nil
+	return translate(s.run(ctx, tool, args, opts, injectConfirm))
+}
+
+// helpResult wraps usage text as a non-error tool result.
+func helpResult(text string) map[string]any {
+	return map[string]any{
+		"content": []any{textContent(text)},
+		"isError": false,
+	}
 }
