@@ -66,19 +66,56 @@ root.AddCommand(agentmcp.Command(root)) // adds `mycli mcp`
 
 ## Tool generation (cobra tree → MCP tools)
 
-- **One tool per runnable leaf command.** Non-runnable group commands are not
-  tools. Skipped: hidden commands, `help`/`completion`/`__complete`/`mcp`, and
-  anything annotated `mcp.skip`.
+Two modes, chosen automatically by whether anything in the tree is `Expose`d:
+
+### Opt-in surface (preferred): `Expose` / group tools
+
+Reflecting *every* leaf produces too many tools — a real CLI yields 35–145,
+well past the ~30-tool point where model tool-selection starts to degrade and
+the ~40-tool cap some hosts (Cursor) enforce. So the surface is **opt-in**:
+
+- `Expose(cmd)` marks a command as a **tool boundary**. Only exposed boundaries
+  become tools; their subtree is reached *through* them, not as more tools. You
+  place `Expose` at exactly the granularity you want and never have to reason
+  about "what should the tool granularity be" — the tree placement *is* the
+  answer. Credential/config/usage commands simply never get exposed.
+- An exposed **group** (has runnable subcommands) becomes **one coarse tool**
+  that dispatches its subcommands via `args[0]`, with a built-in **`help` verb**
+  (`args:["help"]`, also the fallback for empty/unknown subcommands) that lists
+  the subcommands and their flags — an MCP-native equivalent of `usage`. So
+  `issue` + `args:["get","ENG-123"]` runs `lin issue get ENG-123`. The group
+  help lists each subcommand's own flags inline and the flags every subcommand
+  inherits once, under "Common flags".
+- An exposed **leaf** (no runnable subcommands) becomes its own tool.
+- The runner needs no special case: a group tool's path is the group and
+  `args[0]` is the subcommand, so the reconstructed argv is already correct.
+- `--yes` is resolved per-subcommand at call time (via cobra `Find`), and the
+  group's `destructiveHint` is set if *any* reachable subcommand is destructive.
+
+### Legacy fallback: one tool per leaf
+
+When **nothing** is exposed, the bridge falls back to reflecting one tool per
+runnable leaf, so un-migrated CLIs keep working unchanged. Non-runnable groups
+are not tools. Skipped in both modes: hidden commands,
+`help`/`completion`/`__complete`/`mcp`, and anything annotated `mcp.skip`.
+
+### Common to both
+
 - **Name** = command path joined by `_` (e.g. `item get` → `item_get`). Dots
-  are avoided — many MCP clients reject them in tool names.
-- **Description** = `Short` (or `Long` when present).
+  are avoided — many MCP clients reject them in tool names. (A client already
+  namespaces by server, so the per-tool name is unprefixed, e.g. `issue`.)
+- **Description** = `Short` (or `Long` when present); a group tool also lists
+  its subcommands.
 - **Input schema** mirrors the CLI shape: `{ args, options }`. `args` is a
   string array (positional); `options` is a typed object, one property per flag
   with type from pflag (`bool`→boolean, ints→integer, floats→number,
   `*Slice`/`*Array`→array, else string). Required flags
-  (`MarkFlagRequired`) become `options.required`.
+  (`MarkFlagRequired`) become `options.required`. (A group tool takes just
+  `args` — the subcommand and its arguments/flags.)
 - **Annotations**: `mcp.readonly` → `readOnlyHint`; a `--yes` flag or
-  `mcp.destructive` → `destructiveHint`.
+  `mcp.destructive` → `destructiveHint`. Helpers: `Expose`, `Skip`,
+  `Destructive`, `ReadOnly`. All annotations are MCP-only — cobra ignores them
+  for CLI help and execution, so they never leak into CLI-land.
 
 ### Filtered flags
 
