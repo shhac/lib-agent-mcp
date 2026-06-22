@@ -14,6 +14,7 @@ func testRoot() *cobra.Command {
 	root := &cobra.Command{Use: "widget", Version: "1.0.0"}
 	root.PersistentFlags().String("format", "", "Output format")
 	root.PersistentFlags().Bool("debug", false, "Debug logging")
+	root.PersistentFlags().String("workspace", "", "Workspace to operate in") // a non-hidden domain-level persistent flag
 
 	item := &cobra.Command{Use: "item", Short: "Manage widgets"}
 
@@ -72,6 +73,25 @@ func optionProps(t *testing.T, tl Tool) map[string]any {
 	props := tl.InputSchema["properties"].(map[string]any)
 	options := props["options"].(map[string]any)
 	return options["properties"].(map[string]any)
+}
+
+func TestInheritedPersistentFlagsAreSurfaced(t *testing.T) {
+	by := toolMap(t)
+	opts := optionProps(t, by["item_get"])
+	// A non-hidden root persistent flag is a usable tool input on every command.
+	if _, ok := opts["workspace"]; !ok {
+		keys := make([]string, 0, len(opts))
+		for k := range opts {
+			keys = append(keys, k)
+		}
+		t.Errorf("inherited persistent --workspace should appear in item_get options; have %v", keys)
+	}
+	// The infra globals stay hidden even though they are inherited.
+	for _, hidden := range []string{"format", "debug"} {
+		if _, leaked := opts[hidden]; leaked {
+			t.Errorf("hidden inherited flag %q must not appear in the schema", hidden)
+		}
+	}
 }
 
 func TestBuildToolsTreeWalk(t *testing.T) {

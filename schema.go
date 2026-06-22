@@ -62,7 +62,7 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 	hasConfirm := false
 	annotatedDestructive := cmd.Annotations[AnnotationDestructive] == "true"
 
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+	visit := func(f *pflag.Flag) {
 		if f.Name == "yes" {
 			hasConfirm = true // bridge injects --yes on call; keep it out of the schema
 			return
@@ -70,11 +70,20 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 		if f.Hidden || s.opts.hiddenFlags[f.Name] || f.Annotations[AnnotationFlagHidden] != nil {
 			return
 		}
+		if _, seen := optionProps[f.Name]; seen {
+			return // a local flag shadows an inherited one of the same name
+		}
 		optionProps[f.Name] = flagSchema(f)
 		if _, ok := f.Annotations[cobra.BashCompOneRequiredFlag]; ok {
 			optionRequired = append(optionRequired, f.Name)
 		}
-	})
+	}
+	// Local flags plus inherited persistent flags, so a domain-level persistent
+	// flag (e.g. a root --project / --workspace / --profile) is a usable tool
+	// input; the noisy infra globals (format/debug/timeout/help and any
+	// WithHiddenFlags) are dropped by the hidden-flag filter above.
+	cmd.LocalFlags().VisitAll(visit)
+	cmd.InheritedFlags().VisitAll(visit)
 
 	// destructiveHint is the broader signal (host should confirm); injecting
 	// --yes only makes sense when the command actually defines that flag.
