@@ -102,6 +102,17 @@ func TestFsListDirectory(t *testing.T) {
 	}
 }
 
+func TestFsListSingleFile(t *testing.T) {
+	s, _ := fsServer(t)
+	paths := recordPaths(callFs(s, "ls", "cache", "notes.txt"))
+	if len(paths) != 1 {
+		t.Fatalf("ls of a file returned %d records, want 1: %v", len(paths), paths)
+	}
+	if _, ok := paths["notes.txt"]; !ok {
+		t.Errorf("ls notes.txt missing the file: %v", paths)
+	}
+}
+
 func TestFsGetImageInlines(t *testing.T) {
 	s, _ := fsServer(t)
 	res := callFs(s, "get", "cache", "a.png")
