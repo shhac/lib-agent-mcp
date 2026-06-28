@@ -70,7 +70,7 @@ func TestRunStartFailureDegrades(t *testing.T) {
 	if len(res.stderr) == 0 {
 		t.Error("start failure should surface an error on stderr")
 	}
-	out := translate(res)
+	out := translate(res, nil)
 	if !out.IsError {
 		t.Error("translate of a failed run should be isError")
 	}

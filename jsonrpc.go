@@ -149,7 +149,7 @@ func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts m
 	// Inject --yes only when the resolved command actually defines it (host has
 	// already confirmed). A command marked mcp.destructive but lacking a --yes
 	// flag still surfaces destructiveHint, but must not receive an unknown flag.
-	return translate(s.run(ctx, tool, args, opts, commandConfirms(target)))
+	return translate(s.run(ctx, tool, args, opts, commandConfirms(target)), s.opts.fileRoots)
 }
 
 // helpResult wraps usage text as a non-error tool result.

@@ -1,6 +1,22 @@
 package agentmcp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestTranslateErrorWithUnstructuredStderr(t *testing.T) {
+	res := translate(runResult{stderr: []byte("plain boom\n"), exitCode: 1}, nil)
+	if !res.IsError {
+		t.Fatal("non-zero exit must be an error result")
+	}
+	if res.StructuredContent.Error != nil {
+		t.Error("unparseable stderr should leave the structured error nil")
+	}
+	if !strings.Contains(res.Content[0].Text, "plain boom") {
+		t.Errorf("raw stderr should surface in the text block: %q", res.Content[0].Text)
+	}
+}
 
 func TestTranslateSuccessRecordsAndMeta(t *testing.T) {
 	r := runResult{stdout: []byte(
@@ -8,7 +24,7 @@ func TestTranslateSuccessRecordsAndMeta(t *testing.T) {
 			`{"id":"w-2"}` + "\n" +
 			`{"@pagination":{"has_more":true}}` + "\n")}
 
-	res := translate(r)
+	res := translate(r, nil)
 	if res.IsError {
 		t.Fatal("unexpected isError")
 	}
@@ -35,7 +51,7 @@ func TestTranslateErrorSurfacesFixableBy(t *testing.T) {
 		stderr:   []byte(`{"error":"widget \"x\" not found","fixable_by":"agent","hint":"list them"}` + "\n"),
 		exitCode: 1,
 	}
-	res := translate(r)
+	res := translate(r, nil)
 	if !res.IsError {
 		t.Fatal("expected isError for non-zero exit")
 	}
@@ -53,7 +69,7 @@ func TestTranslateErrorSurfacesFixableBy(t *testing.T) {
 
 func TestTranslateNonJSONStdoutDegradesToText(t *testing.T) {
 	r := runResult{stdout: []byte("not json at all\nstill not json\n")}
-	res := translate(r)
+	res := translate(r, nil)
 	if got := len(res.StructuredContent.Records); got != 0 {
 		t.Errorf("records = %d, want 0 for non-JSON output", got)
 	}
@@ -67,7 +83,7 @@ func TestTranslateCapturesMultipleMetaKeys(t *testing.T) {
 		`{"id":"a"}` + "\n" +
 			`{"@pagination":{"has_more":false}}` + "\n" +
 			`{"@counts":{"n":1}}` + "\n")}
-	res := translate(r)
+	res := translate(r, nil)
 	sc := res.StructuredContent
 	if got := len(sc.Records); got != 1 {
 		t.Errorf("records = %d, want 1", got)
@@ -84,7 +100,7 @@ func TestTranslateSuccessAppendsStderrNotice(t *testing.T) {
 		stdout: []byte(`{"id":"a"}` + "\n"),
 		stderr: []byte(`{"notice":"compact projection"}` + "\n"),
 	}
-	res := translate(r)
+	res := translate(r, nil)
 	if res.IsError {
 		t.Fatal("notice on stderr must not make a success a failure")
 	}
