@@ -109,6 +109,52 @@ func TestHTTPGetNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHTTPNonPostMethodsRejected(t *testing.T) {
+	client, url := httpTestServer(t)
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req, _ := http.NewRequest(method, url, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s status = %d, want 405", method, resp.StatusCode)
+		}
+		if a := resp.Header.Get("Allow"); a != http.MethodPost {
+			t.Errorf("%s Allow = %q, want POST", method, a)
+		}
+	}
+}
+
+func TestHTTPUnknownMethod(t *testing.T) {
+	client, url := httpTestServer(t)
+	resp := postMCP(t, client, url, `{"jsonrpc":"2.0","id":7,"method":"does/not/exist"}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (JSON-RPC error rides a 200)", resp.StatusCode)
+	}
+	var out rpcResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out.Error == nil || out.Error.Code != -32601 {
+		t.Errorf("want method-not-found -32601, got %+v", out.Error)
+	}
+}
+
+func TestHTTPURL(t *testing.T) {
+	cases := map[string]string{
+		":8000":          "http://localhost:8000/mcp",
+		"127.0.0.1:8000": "http://127.0.0.1:8000/mcp",
+		"0.0.0.0:9000":   "http://0.0.0.0:9000/mcp",
+	}
+	for addr, want := range cases {
+		if got := httpURL(addr); got != want {
+			t.Errorf("httpURL(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}
+
 func TestServeHTTPListensAndShutsDown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
