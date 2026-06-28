@@ -21,8 +21,12 @@ machine. Its in-app **Custom Connectors are remote-only (HTTP/SSE)** — a local
 stdio server is invisible to them. Local stdio servers reach Cowork through the
 **Claude Desktop bridge** (registered in `claude_desktop_config.json`, proxied
 into the VM). Implication for us: **support both transports.** stdio is the
-default (Desktop bridge, Claude Code); an HTTP mode (future) serves the in-app
-connector path directly, with no `supergateway` shim.
+default (Desktop bridge, Claude Code); the **Streamable HTTP** mode
+(`mcp --http <addr>`, shipped) serves the connector path directly, with no
+`supergateway` shim.
+
+See [http-transport.md](http-transport.md) for the HTTP transport design and its
+phasing (transport now; an additive `--oauth` authorization layer next).
 
 ## Architecture
 

@@ -13,6 +13,10 @@
 //
 //	root.AddCommand(agentmcp.Command(root))
 //
+// The server speaks stdio by default; `mcp --http <addr>` serves the same tools
+// over the Streamable HTTP transport (POST /mcp) instead. The HTTP transport is
+// unauthenticated — bind it to loopback or front it with an auth proxy.
+//
 // Beyond the reflected cobra tools, the bridge can serve a native, read-only
 // file tool ("fs") for clients without filesystem access. Opt in with
 // WithFileRoots; the tool lists and reads files relative to a named root (never

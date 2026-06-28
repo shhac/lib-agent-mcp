@@ -36,6 +36,23 @@ Now `mycli mcp` is an MCP stdio server. Point a client at it:
 }
 ```
 
+## Transports
+
+**stdio** (default) — `mycli mcp`. Newline-delimited JSON-RPC over stdin/stdout;
+the form local clients (Claude Desktop, Claude Code) launch directly.
+
+**Streamable HTTP** — `mycli mcp --http :8000`. Serves JSON-RPC at `POST /mcp`
+(a request returns a JSON response; a notification returns `202`; `GET` is `405`
+— the server never initiates streams). This is the shape a remote MCP client
+reaches over a URL.
+
+> ⚠ **The HTTP transport is unauthenticated.** Any caller that can reach the
+> address can invoke every exposed tool. Bind it to loopback (`--http
+> 127.0.0.1:8000`) or put an authenticating proxy/tunnel in front before
+> exposing it. A remote connector that requires the MCP OAuth handshake needs an
+> auth layer in front (an MCP-aware edge today; an additive `--oauth` layer is
+> the planned next phase).
+
 ## How it works
 
 - **Tools** — one per runnable leaf command (`item get` → `item_get`). Group
