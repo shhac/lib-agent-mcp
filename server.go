@@ -175,11 +175,18 @@ func newServer(root *cobra.Command, opts ...Option) *Server {
 //	root.AddCommand(agentmcp.Command(root))
 func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	s := newServer(root, opts...)
-	return &cobra.Command{
+	var httpAddr string
+	cmd := &cobra.Command{
 		Use:         "mcp",
-		Short:       "Run as an MCP server over stdio",
+		Short:       "Run as an MCP server (stdio by default, or --http <addr>)",
 		Annotations: map[string]string{AnnotationSkip: "true"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The Streamable HTTP transport is unauthenticated: it is opt-in via
+			// --http and prints a warning so it isn't exposed unguarded.
+			if httpAddr != "" {
+				fmt.Fprintln(os.Stderr, s.startupBannerHTTP(httpAddr))
+				return s.ServeHTTP(cmd.Context(), httpAddr)
+			}
 			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
 			// any non-protocol byte there would corrupt the client's parser.
 			fmt.Fprintln(os.Stderr, s.startupBanner())
@@ -193,6 +200,10 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 			return s.Serve(cmd.Context(), os.Stdin, os.Stdout)
 		},
 	}
+	cmd.Flags().StringVar(&httpAddr, "http", "",
+		"Serve the Streamable HTTP transport on this address (e.g. :8000) instead of stdio. "+
+			"Unauthenticated — bind to loopback or front with an auth proxy.")
+	return cmd
 }
 
 // stdinIsInteractive reports whether stdin is a terminal (a human typed the
@@ -234,25 +245,56 @@ Now waiting for an MCP client to connect on stdin — press Ctrl-C to exit.`,
 		name, exec, name, exec)
 }
 
-// startupBanner is the one-line notice written to stderr when the server boots,
-// so an operator watching the process sees that it came up, what it is, and how
-// it's listening. The transport is stdio (stdin/stdout pipes), so there is no
-// port to report; a future network transport would name its address here.
+// startupBanner is the one-line notice written to stderr when the stdio server
+// boots, so an operator watching the process sees that it came up, what it is,
+// and how it's listening.
 func (s *Server) startupBanner() string {
-	name := s.opts.name
-	if name == "" {
-		name = "mcp"
+	return fmt.Sprintf("%s %s — MCP server ready · transport: stdio · %s · protocol %s",
+		s.bannerName(), s.bannerVersion(), s.toolCountPhrase(), defaultProtocolVersion)
+}
+
+// startupBannerHTTP is the boot notice for the Streamable HTTP transport. It
+// names the URL and carries an unmissable warning, since this transport has no
+// authorization of its own.
+func (s *Server) startupBannerHTTP(addr string) string {
+	return fmt.Sprintf("%s %s — MCP server ready · transport: streamable-http · %s · %s · protocol %s\n"+
+		"  ⚠ UNAUTHENTICATED: anyone who can reach this address can call every tool — "+
+		"bind to loopback or front with an auth proxy/tunnel.",
+		s.bannerName(), s.bannerVersion(), httpURL(addr), s.toolCountPhrase(), defaultProtocolVersion)
+}
+
+// bannerName / bannerVersion / toolCountPhrase are the shared pieces of every
+// boot banner, so the stdio and HTTP variants can't drift.
+func (s *Server) bannerName() string {
+	if s.opts.name == "" {
+		return "mcp"
 	}
-	version := s.opts.version
-	if version == "" {
-		version = "dev"
+	return s.opts.name
+}
+
+func (s *Server) bannerVersion() string {
+	if s.opts.version == "" {
+		return "dev"
 	}
-	tools := "tools"
+	return s.opts.version
+}
+
+func (s *Server) toolCountPhrase() string {
+	word := "tools"
 	if len(s.tools) == 1 {
-		tools = "tool"
+		word = "tool"
 	}
-	return fmt.Sprintf("%s %s — MCP server ready · transport: stdio · %d %s · protocol %s",
-		name, version, len(s.tools), tools, defaultProtocolVersion)
+	return fmt.Sprintf("%d %s", len(s.tools), word)
+}
+
+// httpURL renders the MCP endpoint URL for a listen address, defaulting a bare
+// ":port" to localhost for a copy-pasteable banner.
+func httpURL(addr string) string {
+	host := addr
+	if len(addr) > 0 && addr[0] == ':' {
+		host = "localhost" + addr
+	}
+	return "http://" + host + mcpHTTPPath
 }
 
 func rootVersion(root *cobra.Command) string {
