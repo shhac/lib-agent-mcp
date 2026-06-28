@@ -72,6 +72,43 @@ including the Claude Cowork transport constraints.
 `WithNameSeparator`, `WithHiddenFlags`, `WithExecutable`. Infra flags
 (`format`, `debug`, `timeout`, `help`) and `--yes` are hidden by default.
 
+## Read-only file access (the `fs` tool)
+
+An MCP client can't reach the host filesystem, so a file a CLI downloaded is
+invisible to it. Opt into a read-only file tool to close that gap:
+
+```go
+Command(root,
+    WithFileRoots(xdg.Root("cache", app.CacheDir())), // one or more named roots
+    WithFileToolName("fs"),    // optional; default "fs"
+    WithFileInlineLimit(5<<20), // optional; default 5 MiB
+)
+```
+
+With at least one root registered, a native (in-process, not a cobra command)
+tool appears. It is **MCP-only** and addresses files **relative to a named
+root** — the host path is never exposed:
+
+- `["find","<root>","-e","png"]` — search a root by extension and/or a glob
+- `["ls","<root>","<dir?>"]` — list a directory
+- `["get","<root>","<path>"]` — return a file's contents as the right MCP
+  content block (image/audio inline as base64, text verbatim, other binary as an
+  embedded resource). Files over the inline limit return a structured error.
+
+Every path routes through a single containment check
+([`output.SafeResolve`](https://pkg.go.dev/github.com/shhac/lib-agent-output)),
+which rejects `..` escapes and symlinks that resolve outside the root.
+
+When roots are configured, the bridge also **rewrites absolute paths in a
+tool's output** into the same fetchable `FileRef` shape: a command that prints
+`{"path":"/…/cache/downloads/F1.png"}` yields
+`{"path":{"@type":"file","root":"cache","path":"downloads/F1.png",…}}`, which the
+agent hands straight to `get`. This needs no per-CLI change — it fires only for
+paths under a configured root, and leaves all other output untouched.
+
+See [`design-docs/file-access.md`](design-docs/file-access.md) for the full
+design.
+
 ## Example
 
 [`examples/widget`](examples/widget) is a kitchen-sink cobra CLI built on

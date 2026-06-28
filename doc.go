@@ -12,4 +12,11 @@
 // Wire it into a CLI with a single line:
 //
 //	root.AddCommand(agentmcp.Command(root))
+//
+// Beyond the reflected cobra tools, the bridge can serve a native, read-only
+// file tool ("fs") for clients without filesystem access. Opt in with
+// WithFileRoots; the tool lists and reads files relative to a named root (never
+// the host path), and the bridge rewrites absolute paths under a configured
+// root in tool output into the same fetchable FileRef shape. See
+// design-docs/file-access.md.
 package agentmcp

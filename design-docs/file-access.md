@@ -59,10 +59,10 @@ bridge stays lean.
 
 | Piece | Home | Rationale |
 |---|---|---|
-| `FileRef` atom, `FileRoot{Name,Path}`, `SafeResolve`, marker encode/decode, mimetype sniff | **lib-agent-output** | The wire contract's shared home; both producers (CLIs) and the consumer (bridge) already import it. Pure, zero-dep, no secrets. |
-| Ergonomic root construction (`app.CacheRoot()` → `output.FileRoot`) | **lib-agent-cli** | cli owns the app's XDG dirs (`xdg.App`), so it's where an app *declares* the roots it has. |
-| Live root registry, the `fs` tool, content-block types, the output-rewrite pass | **lib-agent-mcp** | Per-server runtime + protocol surface. |
-| Opt-in wiring (`WithFileRoots(app.CacheRoot())`) + migrating path emission to the helper | **the CLI (e.g. agent-slack)** | One-time, tiny: declare roots, emit files via the helper. |
+| `FileRef` atom, `FileRoot{Name,Path}`, `SafeResolve`, `FileRefFor` (reverse-map), `SniffMimeType` | **lib-agent-output** | The wire contract's shared home; both producers (CLIs) and the consumer (bridge) already import it. Pure, zero-dep, no secrets. |
+| Ergonomic root construction (`xdg.Root(name, dir)` → `output.FileRoot`) | **lib-agent-cli** | cli owns the app's XDG dirs (`xdg`), so it's where an app *declares* the roots it has. |
+| Live root registry, the `fs` tool, content-block types, the output-rewrite pass (`rewriteFileRefs`) | **lib-agent-mcp** | Per-server runtime + protocol surface. |
+| Opt-in wiring (`WithFileRoots(xdg.Root("cache", appCacheDir()))`) | **the CLI (e.g. agent-slack)** | One line: declare which roots to expose. The path rewrite then needs no further CLI change. |
 
 "cli owns the named roots" is honored: the app obtains its roots through cli
 (which knows its dirs); the underlying *type* sits in output so the bridge can
@@ -171,20 +171,18 @@ Extend the text-only `contentBlock` to carry the spec's other shapes:
 
 ```go
 type contentBlock struct {
-    Type     string           `json:"type"`
-    Text     string           `json:"text,omitempty"`
-    Data     string           `json:"data,omitempty"`     // base64 for image/audio
-    MimeType string           `json:"mimeType,omitempty"`
-    URI      string           `json:"uri,omitempty"`      // resource_link
-    Name     string           `json:"name,omitempty"`     // resource_link
+    Type     string            `json:"type"`
+    Text     string            `json:"text,omitempty"`
+    Data     string            `json:"data,omitempty"`     // base64 for image/audio
+    MimeType string            `json:"mimeType,omitempty"` // for image/audio
     Resource *embeddedResource `json:"resource,omitempty"` // type:resource
 }
 ```
 
-Constructors: `imageBlock`, `audioBlock`, `resourceBlock` (embedded blob),
-`resourceLinkBlock` (URI pointer). Existing `textBlock` and the whole
-cobra-exec translate path are untouched — these are only produced by the native
-`fs` handler.
+Constructors: `imageBlock`, `audioBlock`, `resourceBlock` (embedded blob).
+Existing `textBlock` is untouched. (No `resource_link` block: a `get` over the
+inline limit returns a structured error rather than a URI pointer — over-cap
+handling is out of scope, so there is nothing for a link block to carry.)
 
 ## Native tools in the bridge
 
@@ -213,49 +211,60 @@ agent-slack wiring (the entire CLI-side change for phase 1):
 ```go
 root.AddCommand(agentmcp.Command(root,
     agentmcp.WithHiddenFlags("color", "expose", "images", "hyperlinks"),
-    agentmcp.WithFileRoots(app.CacheRoot()), // app from lib-agent-cli
+    agentmcp.WithFileRoots(xdg.Root("cache", appCacheDir())), // xdg from lib-agent-cli
 ))
 ```
 
-## Phasing
+## Phasing (as built)
 
 **Phase 1 — the tool.** `output`: `FileRef`, `FileRoot`, `SafeResolve`,
-mimetype sniff. `mcp`: native-tool seam, `fs` (find/ls/get), content blocks,
-the three options, inline-cap error. `cli`: `App` root constructor. `agent-slack`:
-the one-line binding + docs/skill. Fully usable: the agent calls
+`SniffMimeType`. `mcp`: native-tool seam, `fs` (find/ls/get), content blocks,
+the three options, inline-cap error. `cli`: `xdg.Root(name, dir)` constructor.
+`agent-slack`: the one-line binding. Fully usable: the agent calls
 `fs find cache -e png`, then `fs get cache downloads/F0BD….png`.
 
 **Phase 2 — automatic path hints.** So the model doesn't have to `find` then
-`get` after another tool already named a file:
+`get` after another tool already named a file, the bridge rewrites file paths
+in a tool's output into fetchable `FileRef` atoms — with **zero per-CLI work**:
 
-- `output`: an emit helper that tags a value (or list of values — a message may
-  carry many attachments) as `FileRef` atoms instead of raw path strings. The
-  helper owns the marker format; the CLI never hand-rolls it. The CLI's only
-  change is to emit files through the helper.
-- `mcp`: a post-translate pass that scans tool-output records for `@type:"file"`
-  atoms, strips the host parent, and rewrites to an `fs`-fetchable `{root, path}`
-  reference — **only** for roots actually exposed on this server (an unexposed
-  root's file is left as-is / stripped, never pointed at a tool that isn't there).
+- `output`: `FileRefFor(roots, abs)` reverse-maps an absolute path to a
+  `FileRef` under the deepest containing root (pure string mapping).
+- `mcp`: after translating a tool's NDJSON, `rewriteFileRefs` walks each record
+  (recursing through nested objects/arrays) and replaces any string value that
+  is an absolute path **under a configured root** with a `FileRef` atom. The
+  text block is rebuilt with paths scrubbed only when a root path appears in
+  stdout, so every other tool's output is preserved byte-for-byte.
 
-We **do not** scan free text for path-shaped strings — that's heuristic, lossy,
-and turns the bridge from a translator into a content editor. The typed atom is
-the contract; recognition is exact.
+This is an **exact** match (a string equal to or prefixed by a configured
+root's real path), not heuristic path-shape scanning — so it only fires on
+genuine in-root files, needs no marker convention, and an unexposed root's
+paths are simply left untouched (no `FileRef`, nothing to fetch). The CLI keeps
+printing its normal absolute path, which stays useful in plain-CLI mode (where
+the agent has its own filesystem access); only under MCP does the bridge rewrite
+it. The trade-off vs. a CLI-emitted typed marker: the bridge owns all the logic
+and CLIs need no change, at the cost of the rewrite being a bridge-side
+convention rather than a producer-declared one.
 
-Same atom flows through both phases, so "this is a Slack message with a file"
-and "this is a find result" present the identical file object to the model.
+The same `FileRef` shape is produced by `find`/`ls` and by the rewrite, so a
+file looks identical whether listed by the tool or surfaced from another
+command's output.
 
-## Testing
+## Testing (as built)
 
-- `output`: `SafeResolve` traversal + symlink-escape rejection; FileRef
-  round-trip; mimetype sniff.
-- `mcp`: native-tool dispatch; each `get` content-block type; inline-cap error;
-  `find`/`ls` listing shape; root-not-found and bad-path errors; (phase 2)
-  rewrite of embedded atoms for exposed vs. unexposed roots.
-- `agent-slack`: binding present only under `mcp`; contract test that a
-  downloaded file is `get`-able by its listed relative path.
+- `output`: `SafeResolve` traversal + symlink-escape + symlinked-root +
+  not-found + unavailable-root; `FileRef` normalization; `FileRefFor`
+  deepest-root/non-match; `SniffMimeType`.
+- `mcp`: file-tool present/absent + name override + read-only hint; `find` by
+  ext/glob/multi-ext/no-match/truncation; `ls` dir + nested + dir marker; `get`
+  image/text/binary-resource/over-limit/directory/escape; unknown root/verb;
+  rewrite of paths under a root incl. nested objects/arrays, meta preservation,
+  multi-record, and no-roots no-op.
+- `agent-slack`: verified end-to-end via the MCP stdio protocol — `fs` appears
+  in `tools/list` and `fs get cache downloads/<f>` returns the file.
 
 ## Release coordination
 
 Bottom-up, each tagged after its dep is published: `output` → `cli` (bump
-output) → `mcp` (bump output) → `agent-slack` (bump output+cli+mcp, wire it).
-Phase 2 repeats the chain for the helper + rewrite.
+output) → `mcp` (bump output) → `agent-slack` (bump output+cli+mcp). Local
+cross-module development uses a `go.work` in the parent dir (uncommitted); the
+`go.mod` requires are bumped to the freshly released versions at release time.
