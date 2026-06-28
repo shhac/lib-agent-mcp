@@ -4,7 +4,18 @@ import (
 	"fmt"
 	"os"
 
+	output "github.com/shhac/lib-agent-output"
 	"github.com/spf13/cobra"
+)
+
+// File tool defaults.
+const (
+	// defaultFileToolName is the name of the read-only file tool when a CLI opts
+	// in via WithFileRoots without overriding it.
+	defaultFileToolName = "fs"
+	// defaultFileInlineLimit caps the bytes a single get will base64-inline.
+	// Kept small: inlined bytes are base64-expanded into the client's context.
+	defaultFileInlineLimit = 5 << 20 // 5 MiB
 )
 
 // Annotation keys recognised on cobra commands and flags.
@@ -61,6 +72,10 @@ type options struct {
 	nameSeparator string
 	hiddenFlags   map[string]bool
 	executable    string
+
+	fileRoots       []output.FileRoot
+	fileToolName    string
+	fileInlineLimit int64
 }
 
 // Option configures the MCP server.
@@ -89,6 +104,29 @@ func WithHiddenFlags(names ...string) Option {
 	}
 }
 
+// WithFileRoots opts the server into the read-only file tool (named "fs" by
+// default; see WithFileToolName), exposing each named root for the agent to
+// list and read files from. Without at least one root the tool is absent, so
+// file access is strictly opt-in per CLI. Paths are always addressed relative
+// to a root; the host path is never shown to the agent.
+func WithFileRoots(roots ...output.FileRoot) Option {
+	return func(o *options) { o.fileRoots = append(o.fileRoots, roots...) }
+}
+
+// WithFileToolName overrides the file tool's name (default "fs"). Useful when a
+// CLI already has a command that would collide, or prefers a domain name.
+func WithFileToolName(name string) Option {
+	return func(o *options) { o.fileToolName = name }
+}
+
+// WithFileInlineLimit caps the byte size the file tool will base64-inline in a
+// single get (default defaultFileInlineLimit). It is deliberately far below any
+// upload ceiling because inlined bytes cost the client context tokens; a get
+// over the cap returns a structured error rather than a giant payload.
+func WithFileInlineLimit(bytes int64) Option {
+	return func(o *options) { o.fileInlineLimit = bytes }
+}
+
 // WithExecutable overrides the binary used to run tool calls. Defaults to the
 // running binary (os.Executable); primarily useful in tests.
 func WithExecutable(path string) Option {
@@ -109,10 +147,12 @@ var defaultHiddenFlags = []string{"format", "debug", "timeout", "help"}
 
 func newServer(root *cobra.Command, opts ...Option) *Server {
 	o := options{
-		name:          root.Name(),
-		version:       rootVersion(root),
-		nameSeparator: "_",
-		hiddenFlags:   map[string]bool{},
+		name:            root.Name(),
+		version:         rootVersion(root),
+		nameSeparator:   "_",
+		hiddenFlags:     map[string]bool{},
+		fileToolName:    defaultFileToolName,
+		fileInlineLimit: defaultFileInlineLimit,
 	}
 	for _, f := range defaultHiddenFlags {
 		o.hiddenFlags[f] = true

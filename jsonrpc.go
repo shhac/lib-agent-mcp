@@ -132,6 +132,9 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (to
 // resolved subcommand) is the one whose --yes presence decides injection — the
 // confirm decision is made here at call time for both shapes, never stored.
 func (s *Server) callTool(ctx context.Context, tool *Tool, args []string, opts map[string]any) toolResult {
+	if tool.handler != nil {
+		return tool.handler(ctx, args, opts)
+	}
 	target := tool.cmd
 	if tool.group {
 		if len(args) == 0 || args[0] == "help" {

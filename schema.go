@@ -1,6 +1,7 @@
 package agentmcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,7 +20,17 @@ type Tool struct {
 	group bool           // group tool: dispatch subcommands via args[0] + "help" verb
 	cmd   *cobra.Command // the cobra command (group or leaf) this tool maps to; the
 	//                      call-time --yes decision reads commandConfirms(cmd)
+
+	// handler, when set, makes this a native tool: it is served in-process by the
+	// bridge rather than by re-execing a cobra command. cmd/path/group are unused
+	// for native tools. The file tool (fs) is the first such tool.
+	handler nativeHandler
 }
+
+// nativeHandler serves a native tool call in-process. args is the positional
+// argument vector (args[0] is the verb for a group-shaped native tool); opts is
+// the typed options object. It returns a fully-formed tool result.
+type nativeHandler func(ctx context.Context, args []string, opts map[string]any) toolResult
 
 var skipCommands = map[string]bool{
 	"help":             true,
@@ -35,10 +46,13 @@ var skipCommands = map[string]bool{
 // legacy reflect-all (one tool per runnable leaf), so un-migrated CLIs keep
 // working. Hidden, plumbing, and Skip'd commands are always excluded.
 func (s *Server) buildTools() []Tool {
+	var tools []Tool
 	if s.anyExposed() {
-		return s.buildExposedTools()
+		tools = s.buildExposedTools()
+	} else {
+		tools = s.buildLegacyTools()
 	}
-	return s.buildLegacyTools()
+	return append(tools, s.nativeTools()...)
 }
 
 func (s *Server) buildLegacyTools() []Tool {
