@@ -78,16 +78,3 @@ func TestRunStartFailureDegrades(t *testing.T) {
 		t.Error("translate should still emit a text content block on start failure")
 	}
 }
-
-func TestToArg(t *testing.T) {
-	cases := map[any]string{
-		"x":         "x",
-		float64(42): "42",
-		true:        "true",
-	}
-	for in, want := range cases {
-		if got := toArg(in); got != want {
-			t.Errorf("toArg(%v) = %q, want %q", in, got, want)
-		}
-	}
-}

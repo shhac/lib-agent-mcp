@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync"
 )
 
 // defaultProtocolVersion is echoed when the client does not request one.
@@ -40,13 +39,9 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 
 	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
-	var mu sync.Mutex
-	write := func(resp rpcResponse) {
-		mu.Lock()
-		defer mu.Unlock()
-		_ = enc.Encode(resp)
-	}
 
+	// The stdio loop is strictly sequential — scan, dispatch, write — so the
+	// encoder needs no synchronization (there is no second writer).
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -60,7 +55,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			// Notification (e.g. notifications/initialized): no response.
 			continue
 		}
-		write(s.dispatch(ctx, req))
+		_ = enc.Encode(s.dispatch(ctx, req))
 	}
 	return scanner.Err()
 }
@@ -121,7 +116,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (to
 
 	args := make([]string, 0, len(p.Arguments.Args))
 	for _, a := range p.Arguments.Args {
-		args = append(args, toArg(a))
+		args = append(args, fmt.Sprintf("%v", a))
 	}
 	return s.callTool(ctx, tool, args, p.Arguments.Options), nil
 }

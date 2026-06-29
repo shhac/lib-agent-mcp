@@ -78,7 +78,7 @@ func (s *Server) buildExposedTools() []Tool {
 	var walk func(cmd *cobra.Command)
 	walk = func(cmd *cobra.Command) {
 		for _, sub := range visibleSubs(cmd) {
-			if sub.Annotations[AnnotationExpose] == "true" {
+			if isExposed(sub) {
 				if hasRunnableSub(sub) {
 					tools = append(tools, s.toolForGroup(sub))
 				} else if sub.Runnable() {
@@ -123,14 +123,6 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 		},
 	}
 
-	annotations := map[string]any{}
-	if cmd.Annotations[AnnotationReadOnly] == "true" {
-		annotations["readOnlyHint"] = true
-	}
-	if commandDestructive(cmd) {
-		annotations["destructiveHint"] = true
-	}
-
 	t := Tool{
 		Name:        strings.Join(parts, s.opts.nameSeparator),
 		Description: desc,
@@ -138,14 +130,10 @@ func (s *Server) toolFor(cmd *cobra.Command) Tool {
 		path:        parts,
 		cmd:         cmd,
 	}
-	if len(annotations) > 0 {
-		t.Annotations = annotations
-	}
+	t.Annotations = leafAnnotations(cmd)
 	return t
 }
 
-// commandPathParts is the command path relative to root (root's own name
-// dropped), e.g. ["item", "get"].
 // toolForGroup builds a coarse tool for an exposed group command: one tool that
 // dispatches the group's subcommands via args[0], with a "help" verb (also the
 // default when args is empty or names an unknown subcommand) that lists the

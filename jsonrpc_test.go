@@ -70,6 +70,15 @@ func TestDispatchUnknownTool(t *testing.T) {
 	}
 }
 
+func TestDispatchMalformedArguments(t *testing.T) {
+	s := newServer(testRoot())
+	// arguments is an array, not the expected {args,options} object.
+	resp := s.dispatch(context.Background(), rpcReq("9", "tools/call", `{"name":"item_get","arguments":[1,2]}`))
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("malformed arguments should be -32602 invalid params, got %v", resp.Error)
+	}
+}
+
 func TestDispatchToolsList(t *testing.T) {
 	s := newServer(testRoot())
 	resp := s.dispatch(context.Background(), rpcReq("5", "tools/list", ""))

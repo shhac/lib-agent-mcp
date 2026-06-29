@@ -63,12 +63,15 @@ func (s *Server) handleFileTool(_ context.Context, args []string, _ map[string]a
 	if len(args) > 0 {
 		verb = args[0]
 	}
-	switch verb {
-	case "", "help":
+	if verb == "" || verb == "help" {
 		return helpResult(s.fileToolHelp())
-	case "find", "ls", "get":
-		// handled below
-	default:
+	}
+	handle, ok := map[string]func(output.FileRoot, []string) toolResult{
+		"find": s.fsFind,
+		"ls":   s.fsList,
+		"get":  s.fsGet,
+	}[verb]
+	if !ok {
 		return helpResult(fmt.Sprintf("unknown verb %q\n\n%s", verb, s.fileToolHelp()))
 	}
 
@@ -82,16 +85,13 @@ func (s *Server) handleFileTool(_ context.Context, args []string, _ map[string]a
 		return nativeError(output.Newf(output.FixableByAgent,
 			"unknown root %q; one of: %s", rest[0], strings.Join(s.fileRootNames(), ", ")))
 	}
-	rest = rest[1:]
+	return handle(root, rest[1:])
+}
 
-	switch verb {
-	case "find":
-		return s.fsFind(root, rest)
-	case "ls":
-		return s.fsList(root, rest)
-	default: // get
-		return s.fsGet(root, rest)
-	}
+// fsError wraps an OS filesystem error as an agent-fixable tool error — one
+// definition of "a filesystem failure is the agent's to fix".
+func fsError(err error) toolResult {
+	return nativeError(output.Wrap(err, output.FixableByAgent))
 }
 
 // fsFind walks a root, returning FileRef records for regular files matching the
@@ -149,7 +149,7 @@ func (s *Server) fsList(root output.FileRoot, args []string) toolResult {
 
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nativeError(output.Wrap(err, output.FixableByAgent))
+		return fsError(err)
 	}
 	if !info.IsDir() {
 		ref, _ := output.FileRefAt(root.Name, relSlash, abs)
@@ -184,7 +184,7 @@ func (s *Server) fsGet(root output.FileRoot, args []string) toolResult {
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nativeError(output.Wrap(err, output.FixableByAgent))
+		return fsError(err)
 	}
 	if info.IsDir() {
 		return nativeError(output.Newf(output.FixableByAgent, "%s is a directory; use ls", rel))
@@ -197,7 +197,7 @@ func (s *Server) fsGet(root output.FileRoot, args []string) toolResult {
 
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return nativeError(output.Wrap(err, output.FixableByAgent))
+		return fsError(err)
 	}
 	relSlash := path.Clean(filepath.ToSlash(rel))
 	mimeType := output.SniffMimeType(path.Base(relSlash), data)

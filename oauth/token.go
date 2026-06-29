@@ -14,6 +14,11 @@ import (
 // SecretStore. It is generated once and reused, so tokens survive a restart.
 const signingKeyStoreKey = "signing-key"
 
+// signingKeyBytes is the HMAC key length. A shorter key (e.g. a truncated or
+// empty store entry) is rejected at load — HS256 would otherwise sign and
+// self-validate with a weak/empty key, yielding trivially forgeable tokens.
+const signingKeyBytes = 32
+
 // signingMethod is the only algorithm the issuer mints and accepts. Pinning it
 // (with WithValidMethods on parse) closes the "alg" confusion / "none" attacks.
 var signingMethod = jwt.SigningMethodHS256
@@ -24,7 +29,9 @@ type tokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-// Verified is the validated identity carried by an access token.
+// Verified is the validated identity carried by an access token — the public
+// affordance for an embedder that wants the client/scope/expiry off a token.
+// The in-tree Protect gate needs only validity, so it discards the value.
 type Verified struct {
 	ClientID  string
 	Scope     string
@@ -100,12 +107,21 @@ func (i *Issuer) Validate(token string) (*Verified, error) {
 // loadOrCreateKey returns the persisted 32-byte signing key, generating and
 // storing one (base64url) on first use.
 func loadOrCreateKey(store SecretStore) ([]byte, error) {
-	if v, ok, err := store.Get(signingKeyStoreKey); err != nil {
+	v, ok, err := store.Get(signingKeyStoreKey)
+	if err != nil {
 		return nil, err
-	} else if ok {
-		return base64.RawURLEncoding.DecodeString(v)
 	}
-	key := make([]byte, 32)
+	if ok {
+		key, err := base64.RawURLEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("oauth: decoding stored signing key: %w", err)
+		}
+		if len(key) < signingKeyBytes {
+			return nil, fmt.Errorf("oauth: stored signing key is %d bytes, need >= %d — refusing to sign with a weak key", len(key), signingKeyBytes)
+		}
+		return key, nil
+	}
+	key := make([]byte, signingKeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("oauth: generating signing key: %w", err)
 	}

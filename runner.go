@@ -90,7 +90,3 @@ func renderFlag(name string, v any) []string {
 		return []string{fmt.Sprintf("--%s=%v", name, val)}
 	}
 }
-
-func toArg(v any) string {
-	return fmt.Sprintf("%v", v)
-}

@@ -95,3 +95,19 @@ func subNames(cmd *cobra.Command) []string {
 func groupHasDestructive(group *cobra.Command) bool {
 	return anyCommand(group, commandDestructive)
 }
+
+// leafAnnotations maps a leaf command's cobra annotations to the MCP tool hints
+// (readOnlyHint/destructiveHint), or nil when it carries none.
+func leafAnnotations(cmd *cobra.Command) map[string]any {
+	a := map[string]any{}
+	if cmd.Annotations[AnnotationReadOnly] == "true" {
+		a["readOnlyHint"] = true
+	}
+	if commandDestructive(cmd) {
+		a["destructiveHint"] = true
+	}
+	if len(a) == 0 {
+		return nil
+	}
+	return a
+}

@@ -1,11 +1,34 @@
 package oauth
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// TestNewIssuerRejectsWeakStoredKey fails closed: a present-but-empty, too-short,
+// or unparseable stored signing key must error rather than sign with a weak/empty
+// HMAC key (which HS256 would happily self-validate, making tokens forgeable).
+func TestNewIssuerRejectsWeakStoredKey(t *testing.T) {
+	cases := map[string]string{
+		"empty":      "",
+		"too short":  base64.RawURLEncoding.EncodeToString([]byte("only-9-by")),
+		"non-base64": "!!! not base64 !!!",
+	}
+	for name, stored := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := NewMemStore()
+			if err := store.Set(signingKeyStoreKey, stored); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewIssuer(store, testIssuer, testIssuer, time.Hour); err == nil {
+				t.Errorf("NewIssuer accepted a %s signing key, want an error", name)
+			}
+		})
+	}
+}
 
 const (
 	testIssuer = "https://mcp.example.com"

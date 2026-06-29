@@ -26,8 +26,12 @@ type oauthHarness struct {
 }
 
 func newHarness(t *testing.T) *oauthHarness {
+	return newHarnessWithStore(t, NewMemStore())
+}
+
+func newHarnessWithStore(t *testing.T, store SecretStore) *oauthHarness {
 	t.Helper()
-	srv, err := New(Config{Store: NewMemStore(), PublicURL: testPublicURL})
+	srv, err := New(Config{Store: store, PublicURL: testPublicURL})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
