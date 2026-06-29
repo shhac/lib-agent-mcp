@@ -75,6 +75,29 @@ root.AddCommand(agentmcp.Command(root))
 No new `Option` is needed for Phase 1 — `--http` is a flag on the `mcp` command.
 Phase 2 will add `WithOAuth(...)` / `--oauth`.
 
+## Tailscale auto-wiring
+
+`--tailscale funnel|serve` brings up a Tailscale tunnel in front of the `--http`
+listener and tears it down on exit, so one command yields a public (funnel) or
+tailnet-private (serve) HTTPS URL with no separate `tailscale` step.
+
+- **`--tailscale funnel`** exposes the server on the public internet (ports 443,
+  8443, 10000 only) — what a cloud MCP connector needs. **`serve`** is tailnet-only.
+- **`--tailscale-port 443|8443|10000`** picks the public HTTPS port (default 443).
+- **`--public-url` becomes optional**: when unset it is derived from the node's
+  MagicDNS name (`tailscale status --json` → `Self.DNSName`), carrying the port
+  when it isn't 443. The OAuth resource stays `<public-url>/mcp`.
+- **Lifecycle**: started with `tailscale <mode> --bg --yes --https=<port>
+  <local-port>`, removed with `tailscale <mode> --https=<port> off`. The `mcp`
+  command installs its own SIGINT/SIGTERM handler (the host runs it with a
+  background context), so Ctrl-C drains the HTTP server and runs teardown on a
+  fresh context — the cancelled serve context can't be used for the off command.
+- The `tailscale` calls sit behind a `cmdRunner` seam, so validation, URL
+  derivation, and start/teardown argv are unit-tested without the binary or
+  network; only the thin `exec`/`LookPath` glue is uncovered.
+
+Requires the `tailscale` CLI on PATH and Funnel enabled on the tailnet.
+
 ## Testing
 
 - Handler: initialize/tools-list happy paths, notification → 202, parse error →

@@ -1,9 +1,12 @@
 package agentmcp
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/shhac/lib-agent-mcp/oauth"
 	output "github.com/shhac/lib-agent-output"
@@ -194,16 +197,42 @@ func newServer(root *cobra.Command, opts ...Option) *Server {
 //	root.AddCommand(agentmcp.Command(root))
 func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	s := newServer(root, opts...)
-	var httpAddr, oauthMode, publicURL string
+	var httpAddr, oauthMode, publicURL, tailscaleMode string
+	var tailscalePort int
 	cmd := &cobra.Command{
 		Use:         "mcp",
 		Short:       "Run as an MCP server (stdio by default, or --http <addr>)",
 		Annotations: map[string]string{AnnotationSkip: "true"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if tailscaleMode != "" && httpAddr == "" {
+				return errors.New("--tailscale requires --http (it fronts the local HTTP listener)")
+			}
 			// The Streamable HTTP transport is opt-in via --http. It is
 			// unauthenticated unless --oauth local makes the server its own OAuth
 			// authorization + resource server.
 			if httpAddr != "" {
+				// Own SIGINT/SIGTERM here: the host runs the command with a
+				// background context (no signal wiring), but Ctrl-C must drain the
+				// HTTP server and tear down any Tailscale tunnel we started.
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				// --tailscale brings up the funnel/serve tunnel and, when
+				// --public-url is unset, derives it from the node's MagicDNS name.
+				resolvedURL, tsDown, err := wireTailscale(ctx, tailscaleMode, tailscalePort, httpAddr, publicURL)
+				if err != nil {
+					return err
+				}
+				if tsDown != nil {
+					fmt.Fprintf(os.Stderr, "tailscale %s: %s → %s (will shut down on exit)\n", tailscaleMode, resolvedURL, httpURL(httpAddr))
+					defer func() {
+						if err := tsDown(); err != nil {
+							fmt.Fprintf(os.Stderr, "tailscale %s teardown: %v\n", tailscaleMode, err)
+						} else {
+							fmt.Fprintf(os.Stderr, "tailscale %s: shut down\n", tailscaleMode)
+						}
+					}()
+				}
+				publicURL = resolvedURL
 				if err := s.setupOAuth(oauthMode, publicURL); err != nil {
 					return err
 				}
@@ -215,7 +244,7 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 				} else {
 					fmt.Fprintln(os.Stderr, s.startupBannerHTTP(httpAddr))
 				}
-				return s.ServeHTTP(cmd.Context(), httpAddr)
+				return s.ServeHTTP(ctx, httpAddr)
 			}
 			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
 			// any non-protocol byte there would corrupt the client's parser.
@@ -237,7 +266,14 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 		`Enable OAuth on the HTTP transport. Only "local" is supported: the server is its own `+
 			"OAuth 2.1 authorization server. Requires --http and --public-url.")
 	cmd.Flags().StringVar(&publicURL, "public-url", "",
-		"Externally-reachable https URL of this server (the OAuth token audience/issuer); required with --oauth.")
+		"Externally-reachable https URL of this server (the OAuth issuer; the /mcp endpoint is the token "+
+			"audience). Required with --oauth unless --tailscale derives it.")
+	cmd.Flags().StringVar(&tailscaleMode, "tailscale", "",
+		`Front the HTTP transport with a Tailscale tunnel: "funnel" (public internet) or "serve" `+
+			"(tailnet-private). Derives --public-url from the node's MagicDNS name when unset, and tears the "+
+			"tunnel down on exit. Requires --http.")
+	cmd.Flags().IntVar(&tailscalePort, "tailscale-port", 443,
+		"Public HTTPS port for --tailscale (443, 8443, or 10000).")
 	return cmd
 }
 
