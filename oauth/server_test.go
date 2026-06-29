@@ -340,6 +340,62 @@ func TestValidRedirectURI(t *testing.T) {
 	}
 }
 
+func TestAuthorizeParamErrorsRedirect(t *testing.T) {
+	h := newHarness(t)
+	clientID := h.registerClient(t)
+	base := AuthorizePath + "?client_id=" + clientID + "&redirect_uri=" + url.QueryEscape(testRedirect) + "&state=s"
+	cases := map[string]string{
+		base + "&response_type=token&code_challenge=" + challengeFor(testVerifier) + "&code_challenge_method=S256": "unsupported_response_type",
+		base + "&response_type=code": "invalid_request", // missing code_challenge
+		base + "&response_type=code&code_challenge=x&code_challenge_method=plain": "invalid_request",
+	}
+	for u, wantErr := range cases {
+		resp := h.get(t, u)
+		if resp.StatusCode != http.StatusFound {
+			resp.Body.Close()
+			t.Errorf("status = %d, want 302 redirect for %s", resp.StatusCode, u)
+			continue
+		}
+		loc, _ := url.Parse(resp.Header.Get("Location"))
+		resp.Body.Close()
+		if got := loc.Query().Get("error"); got != wantErr {
+			t.Errorf("error = %q, want %q for %s", got, wantErr, u)
+		}
+		if loc.Query().Get("state") != "s" {
+			t.Errorf("state not preserved on the error redirect for %s", u)
+		}
+	}
+}
+
+func TestRegisterBodyTooLarge(t *testing.T) {
+	h := newHarness(t)
+	big := strings.Repeat("a", 70<<10) // > maxRegisterBody (64 KiB)
+	body := `{"redirect_uris":["` + testRedirect + `"],"client_name":"` + big + `"}`
+	resp, err := h.client.Post(h.url(RegisterPath), "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("oversized register body = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRefreshClientIDMismatch(t *testing.T) {
+	h := newHarness(t)
+	pairing, _ := h.srv.PairingCode()
+	clientID := h.registerClient(t)
+	code := h.authorize(t, clientID, pairing).Query().Get("code")
+	refresh, _ := h.exchange(t, clientID, code)["refresh_token"].(string)
+
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"someone-else"}}
+	resp := h.postForm(t, TokenPath, form)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("refresh with mismatched client_id = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestNewValidatesConfig(t *testing.T) {
 	if _, err := New(Config{PublicURL: testPublicURL}); err == nil {
 		t.Error("New without Store should error")
