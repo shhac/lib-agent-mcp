@@ -9,6 +9,36 @@ import (
 	"github.com/shhac/lib-agent-mcp/oauth"
 )
 
+// oauthService is the keyring service id the local-OAuth secrets live under —
+// shared by the running server (setupOAuth) and the `pair` maintenance commands,
+// so they always target the same namespace. Defaults to "<name>.mcp"; the host
+// app should override it (WithOAuthKeyringService) to match its own reverse-DNS
+// keyring service, e.g. "app.example.agent-foo.mcp".
+func (s *Server) oauthService() string {
+	if s.opts.oauthKeyringService != "" {
+		return s.opts.oauthKeyringService
+	}
+	return s.opts.name + ".mcp"
+}
+
+// oauthStore opens the keyring-backed secret store the local-OAuth layer uses,
+// erroring when no OS keyring is available (the secrets can't be read or changed).
+// It is the single definition of how the OAuth store is opened and checked.
+func (s *Server) oauthStore() (*oauth.KeyringStore, error) {
+	store := oauth.NewKeyringStore(s.oauthService())
+	if !store.Available() {
+		return nil, errors.New("no OS keyring is available on this host, so the local-OAuth secrets can't be read")
+	}
+	return store, nil
+}
+
+// mcpEndpoint is the canonical /mcp resource URL for a public root URL — the
+// protected resource and token audience (the client binds the audience to the
+// exact URL it calls, so it's the endpoint, not the bare host).
+func mcpEndpoint(publicURL string) string {
+	return strings.TrimRight(publicURL, "/") + mcpHTTPPath
+}
+
 // setupOAuth builds the local OAuth server when --oauth local is set, validating
 // the flag combination. A mode of "" leaves OAuth off (s.oauth stays nil).
 func (s *Server) setupOAuth(mode, publicURL string) error {
@@ -22,15 +52,12 @@ func (s *Server) setupOAuth(mode, publicURL string) error {
 		return errors.New("--oauth local requires --public-url <https-url> (the externally-reachable URL of this server)")
 	}
 
-	store := oauth.NewKeyringStore(s.oauthService())
-	if !store.Available() {
-		return errors.New("--oauth local needs an OS keyring to store its signing key, but none is available on this host")
+	store, err := s.oauthStore()
+	if err != nil {
+		return fmt.Errorf("--oauth local needs an OS keyring to store its signing key: %w", err)
 	}
 
-	// The protected resource is the /mcp endpoint, not the bare host: the client
-	// binds the token audience to the exact URL it calls.
-	resource := strings.TrimRight(publicURL, "/") + mcpHTTPPath
-	osrv, err := oauth.New(oauth.Config{Store: store, PublicURL: publicURL, Resource: resource})
+	osrv, err := oauth.New(oauth.Config{Store: store, PublicURL: publicURL, Resource: mcpEndpoint(publicURL)})
 	if err != nil {
 		return err
 	}
@@ -54,13 +81,12 @@ func (s *Server) writeOAuthBootInfo(w io.Writer, addr, publicURL string) error {
 	if err != nil {
 		return err
 	}
-	endpoint := strings.TrimRight(publicURL, "/") + mcpHTTPPath
 	_, err = fmt.Fprintf(w, `Connect this MCP server (OAuth 2.1, local — it is its own authorization server):
   connector URL  : %s          ← add this exact URL (with /mcp) to the connector
   local listener : %s
   pairing code   : %s
   ⚠ Treat the pairing code like a password. Enter it once on the browser
     approval page when a client connects; it is reusable across clients.
-`, endpoint, httpURL(addr), code)
+`, mcpEndpoint(publicURL), httpURL(addr), code)
 	return err
 }

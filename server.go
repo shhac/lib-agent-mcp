@@ -1,155 +1,17 @@
 package agentmcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/shhac/lib-agent-mcp/oauth"
-	output "github.com/shhac/lib-agent-output"
 	"github.com/spf13/cobra"
 )
-
-// File tool defaults.
-const (
-	// defaultFileToolName is the name of the read-only file tool when a CLI opts
-	// in via WithFileRoots without overriding it.
-	defaultFileToolName = "fs"
-	// defaultFileInlineLimit caps the bytes a single get will base64-inline.
-	// Kept small: inlined bytes are base64-expanded into the client's context.
-	defaultFileInlineLimit = 5 << 20 // 5 MiB
-)
-
-// Annotation keys recognised on cobra commands and flags.
-const (
-	// AnnotationSkip on a command hides it (and only it) from the tool list.
-	AnnotationSkip = "mcp.skip"
-	// AnnotationReadOnly marks a command as side-effect-free; surfaced as the
-	// MCP readOnlyHint annotation.
-	AnnotationReadOnly = "mcp.readonly"
-	// AnnotationDestructive marks a command destructive even without a --yes
-	// flag; surfaced as destructiveHint and triggers --yes injection on call.
-	AnnotationDestructive = "mcp.destructive"
-	// AnnotationFlagHidden on a flag hides it from the generated input schema.
-	AnnotationFlagHidden = "mcp.hidden"
-	// AnnotationExpose marks a command as an MCP tool boundary (opt-in). A group
-	// command becomes one coarse tool that dispatches its subcommands via args
-	// (with a "help" verb); a leaf becomes its own tool. When NO command in the
-	// tree is exposed, the server falls back to legacy reflect-all (one tool per
-	// runnable leaf), so un-migrated CLIs keep working.
-	AnnotationExpose = "mcp.expose"
-)
-
-// Expose marks cmd as an MCP tool boundary (opt-in): the agent-facing surface is
-// only what you Expose, so credential/config/usage commands stay invisible to
-// agents unless deliberately surfaced. Expose a group to get one coarse tool with
-// subcommand dispatch + a "help" verb; expose a leaf for a standalone tool. The
-// annotation is MCP-only — cobra ignores it for CLI help and execution.
-func Expose(cmd *cobra.Command) { setAnnotation(cmd, AnnotationExpose, "true") }
-
-// Skip hides cmd (and only it) from the generated tool list / a group's
-// subcommand dispatch. MCP-only; the CLI is unaffected.
-func Skip(cmd *cobra.Command) { setAnnotation(cmd, AnnotationSkip, "true") }
-
-// Destructive marks cmd as destructive, surfacing the MCP destructiveHint so the
-// host confirms before the call. Use it for mutating commands that have no --yes
-// confirmation flag of their own; commands that DO define --yes are detected
-// automatically. MCP-only; the CLI is unaffected.
-func Destructive(cmd *cobra.Command) { setAnnotation(cmd, AnnotationDestructive, "true") }
-
-// ReadOnly marks cmd as side-effect-free, surfacing the MCP readOnlyHint.
-// MCP-only; the CLI is unaffected.
-func ReadOnly(cmd *cobra.Command) { setAnnotation(cmd, AnnotationReadOnly, "true") }
-
-func setAnnotation(cmd *cobra.Command, key, val string) {
-	if cmd.Annotations == nil {
-		cmd.Annotations = map[string]string{}
-	}
-	cmd.Annotations[key] = val
-}
-
-type options struct {
-	name          string
-	version       string
-	nameSeparator string
-	hiddenFlags   map[string]bool
-	executable    string
-
-	fileRoots       []output.FileRoot
-	fileToolName    string
-	fileInlineLimit int64
-
-	// oauthKeyringService overrides the keyring service id under which the
-	// local-OAuth secrets are stored (default "<name>.mcp"). It is kept distinct
-	// from a CLI's own API-credential service so the two never mix.
-	oauthKeyringService string
-}
-
-// Option configures the MCP server.
-type Option func(*options)
-
-// WithName overrides the server name reported during initialize (defaults to
-// the root command's name).
-func WithName(name string) Option { return func(o *options) { o.name = name } }
-
-// WithVersion overrides the server version reported during initialize.
-func WithVersion(v string) Option { return func(o *options) { o.version = v } }
-
-// WithNameSeparator sets the separator joining a command path into a tool name
-// (default "_", producing e.g. item_get).
-func WithNameSeparator(sep string) Option {
-	return func(o *options) { o.nameSeparator = sep }
-}
-
-// WithHiddenFlags hides additional flags (by name) from every tool's schema,
-// on top of the defaults (format, debug, timeout, help).
-func WithHiddenFlags(names ...string) Option {
-	return func(o *options) {
-		for _, n := range names {
-			o.hiddenFlags[n] = true
-		}
-	}
-}
-
-// WithFileRoots opts the server into the read-only file tool (named "fs" by
-// default; see WithFileToolName), exposing each named root for the agent to
-// list and read files from. Without at least one root the tool is absent, so
-// file access is strictly opt-in per CLI. Paths are always addressed relative
-// to a root; the host path is never shown to the agent.
-func WithFileRoots(roots ...output.FileRoot) Option {
-	return func(o *options) { o.fileRoots = append(o.fileRoots, roots...) }
-}
-
-// WithFileToolName overrides the file tool's name (default "fs"). Useful when a
-// CLI already has a command that would collide, or prefers a domain name.
-func WithFileToolName(name string) Option {
-	return func(o *options) { o.fileToolName = name }
-}
-
-// WithFileInlineLimit caps the byte size the file tool will base64-inline in a
-// single get (default defaultFileInlineLimit). It is deliberately far below any
-// upload ceiling because inlined bytes cost the client context tokens; a get
-// over the cap returns a structured error rather than a giant payload.
-func WithFileInlineLimit(bytes int64) Option {
-	return func(o *options) { o.fileInlineLimit = bytes }
-}
-
-// WithOAuthKeyringService overrides the keyring service id under which the
-// local-OAuth layer stores its secrets (default "<root-name>.mcp"). Set it to a
-// reverse-DNS id matching your app's convention; it must differ from the CLI's
-// own credential service so the two trust domains stay separate.
-func WithOAuthKeyringService(service string) Option {
-	return func(o *options) { o.oauthKeyringService = service }
-}
-
-// WithExecutable overrides the binary used to run tool calls. Defaults to the
-// running binary (os.Executable); primarily useful in tests.
-func WithExecutable(path string) Option {
-	return func(o *options) { o.executable = path }
-}
 
 // Server serves a cobra command tree over the MCP stdio transport. The tool
 // list is derived once at construction (the command tree is static after
@@ -168,8 +30,6 @@ type Server struct {
 	// built from --access-log at serve time.
 	accessLog *accessLogger
 }
-
-var defaultHiddenFlags = []string{"format", "debug", "timeout", "help"}
 
 func newServer(root *cobra.Command, opts ...Option) *Server {
 	o := options{
@@ -211,64 +71,19 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 			if tailscaleMode != "" && httpAddr == "" {
 				return errors.New("--tailscale requires --http (it fronts the local HTTP listener)")
 			}
-			// The Streamable HTTP transport is opt-in via --http. It is
-			// unauthenticated unless --oauth local makes the server its own OAuth
-			// authorization + resource server.
+			// The Streamable HTTP transport is opt-in via --http; otherwise the
+			// server speaks the protocol over stdio.
 			if httpAddr != "" {
-				// Own SIGINT/SIGTERM here: the host runs the command with a
-				// background context (no signal wiring), but Ctrl-C must drain the
-				// HTTP server and tear down any Tailscale tunnel we started.
-				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-				defer stop()
-				if accessLogPath != "" {
-					al, err := newAccessLogger(accessLogPath)
-					if err != nil {
-						return err
-					}
-					s.accessLog = al
-					defer func() { _ = al.Close() }()
-				}
-				// --tailscale brings up the funnel/serve tunnel and, when
-				// --public-url is unset, derives it from the node's MagicDNS name.
-				resolvedURL, tsDown, err := wireTailscale(ctx, tailscaleMode, tailscalePort, httpAddr, publicURL)
-				if err != nil {
-					return err
-				}
-				if tsDown != nil {
-					fmt.Fprintf(os.Stderr, "tailscale %s: %s → %s (will shut down on exit)\n", tailscaleMode, resolvedURL, httpURL(httpAddr))
-					defer func() {
-						if err := tsDown(); err != nil {
-							fmt.Fprintf(os.Stderr, "tailscale %s teardown: %v\n", tailscaleMode, err)
-						} else {
-							fmt.Fprintf(os.Stderr, "tailscale %s: shut down\n", tailscaleMode)
-						}
-					}()
-				}
-				publicURL = resolvedURL
-				if err := s.setupOAuth(oauthMode, publicURL); err != nil {
-					return err
-				}
-				if s.oauth != nil {
-					fmt.Fprintln(os.Stderr, s.startupBannerHTTPOAuth(httpAddr))
-					if err := s.writeOAuthBootInfo(os.Stdout, httpAddr, publicURL); err != nil {
-						return err
-					}
-				} else {
-					fmt.Fprintln(os.Stderr, s.startupBannerHTTP(httpAddr))
-				}
-				return s.ServeHTTP(ctx, httpAddr)
+				return s.runHTTP(cmd.Context(), httpServeConfig{
+					addr:          httpAddr,
+					oauthMode:     oauthMode,
+					publicURL:     publicURL,
+					tailscaleMode: tailscaleMode,
+					tailscalePort: tailscalePort,
+					accessLogPath: accessLogPath,
+				})
 			}
-			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
-			// any non-protocol byte there would corrupt the client's parser.
-			fmt.Fprintln(os.Stderr, s.startupBanner())
-			// When a human ran this directly (a TTY on stdin, no MCP host driving
-			// it), they can't do anything useful — the server just waits for
-			// JSON-RPC. Print the config needed to register it instead, so the
-			// output is self-describing (paste-able into an LLM or a client config).
-			if stdinIsInteractive() {
-				fmt.Fprintln(os.Stderr, "\n"+s.setupHint())
-			}
-			return s.Serve(cmd.Context(), os.Stdin, os.Stdout)
+			return s.runStdio(cmd.Context())
 		},
 	}
 	cmd.Flags().StringVar(&httpAddr, "http", "",
@@ -293,6 +108,87 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	return cmd
 }
 
+// httpServeConfig carries the --http transport flags from the cobra command into
+// runHTTP, keeping the method signature flat.
+type httpServeConfig struct {
+	addr          string
+	oauthMode     string
+	publicURL     string
+	tailscaleMode string
+	tailscalePort int
+	accessLogPath string
+}
+
+// runStdio serves the MCP protocol over stdin/stdout — the default transport.
+func (s *Server) runStdio(ctx context.Context) error {
+	// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and any
+	// non-protocol byte there would corrupt the client's parser.
+	fmt.Fprintln(os.Stderr, s.startupBanner())
+	// When a human ran this directly (a TTY on stdin, no MCP host driving it),
+	// they can't do anything useful — print the registration config instead, so
+	// the output is self-describing (paste-able into an LLM or a client config).
+	if stdinIsInteractive() {
+		fmt.Fprintln(os.Stderr, "\n"+s.setupHint())
+	}
+	return s.Serve(ctx, os.Stdin, os.Stdout)
+}
+
+// runHTTP serves the Streamable HTTP transport. It owns SIGINT/SIGTERM (the host
+// runs the command with a background context, so Ctrl-C must drain the server
+// and tear down any tunnel we started), then layers in optional access logging,
+// optional Tailscale fronting (which can derive the public URL), and optional
+// local OAuth, before serving until the context is cancelled.
+func (s *Server) runHTTP(parent context.Context, cfg httpServeConfig) error {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if cfg.accessLogPath != "" {
+		al, err := newAccessLogger(cfg.accessLogPath)
+		if err != nil {
+			return err
+		}
+		s.accessLog = al
+		defer func() { _ = al.Close() }()
+	}
+
+	// --tailscale brings up the funnel/serve tunnel and, when --public-url is
+	// unset, derives it from the node's MagicDNS name.
+	publicURL, tsDown, err := wireTailscale(ctx, cfg.tailscaleMode, cfg.tailscalePort, cfg.addr, cfg.publicURL)
+	if err != nil {
+		return err
+	}
+	if tsDown != nil {
+		fmt.Fprintf(os.Stderr, "tailscale %s: %s → %s (will shut down on exit)\n", cfg.tailscaleMode, publicURL, httpURL(cfg.addr))
+		defer func() {
+			if err := tsDown(); err != nil {
+				fmt.Fprintf(os.Stderr, "tailscale %s teardown: %v\n", cfg.tailscaleMode, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "tailscale %s: shut down\n", cfg.tailscaleMode)
+			}
+		}()
+	}
+
+	if err := s.setupOAuth(cfg.oauthMode, publicURL); err != nil {
+		return err
+	}
+	if err := s.printHTTPStartup(os.Stderr, os.Stdout, cfg.addr, publicURL); err != nil {
+		return err
+	}
+	return s.ServeHTTP(ctx, cfg.addr)
+}
+
+// printHTTPStartup writes the boot banner to stderr and, when OAuth is on, the
+// connection details (including the pairing code) to stdout. It is the single
+// place the OAuth-on/off output decision lives.
+func (s *Server) printHTTPStartup(stderr, stdout io.Writer, addr, publicURL string) error {
+	if s.oauth == nil {
+		_, _ = fmt.Fprintln(stderr, s.startupBannerHTTP(addr))
+		return nil
+	}
+	_, _ = fmt.Fprintln(stderr, s.startupBannerHTTPOAuth(addr))
+	return s.writeOAuthBootInfo(stdout, addr, publicURL)
+}
+
 // stdinIsInteractive reports whether stdin is a terminal (a human typed the
 // command) rather than a pipe (an MCP host is driving the protocol). It uses a
 // dependency-free char-device check so the bridge stays lean.
@@ -306,100 +202,18 @@ func stdinIsInteractive() bool {
 // using the server's own absolute path, plus the Claude Code one-liner — so the
 // reader (or an LLM they paste it into) has everything needed to wire it up.
 func (s *Server) setupHint() string {
-	name := s.opts.name
-	if name == "" {
-		name = "mcp"
-	}
-	exec := s.executable()
+	name, exec := s.bannerName(), s.executable()
 	return fmt.Sprintf(`This is an MCP server: it speaks JSON-RPC over stdin/stdout and is meant to be
 launched by an MCP client, not run by hand. To register it, add this to your MCP
 client config (Claude Desktop / Cursor / VS Code / Windsurf / …):
 
-    {
-      "mcpServers": {
-        %q: {
-          "command": %q,
-          "args": ["mcp"]
-        }
-      }
-    }
+    %s
 
 …or, with the Claude Code CLI:
 
-    claude mcp add %s -- %s mcp
+    %s
 
 Now waiting for an MCP client to connect on stdin — press Ctrl-C to exit.`,
-		name, exec, name, exec)
+		mcpServersConfig(name, exec, true), claudeMcpAddLine(name, exec))
 }
 
-// startupBanner is the one-line notice written to stderr when the stdio server
-// boots, so an operator watching the process sees that it came up, what it is,
-// and how it's listening.
-func (s *Server) startupBanner() string {
-	return s.bannerCore("stdio", "")
-}
-
-// bannerCore builds the common boot-banner line shared by every transport:
-// "<name> <version> — MCP server ready · transport: <t> [· <location>] · <tools>
-// · protocol <v>". The transport variants append their own warning or suffix.
-func (s *Server) bannerCore(transport, location string) string {
-	parts := []string{
-		fmt.Sprintf("%s %s — MCP server ready", s.bannerName(), s.bannerVersion()),
-		"transport: " + transport,
-	}
-	if location != "" {
-		parts = append(parts, location)
-	}
-	parts = append(parts, s.toolCountPhrase(), "protocol "+defaultProtocolVersion)
-	return strings.Join(parts, " · ")
-}
-
-// startupBannerHTTP is the boot notice for the Streamable HTTP transport. It
-// names the URL and carries an unmissable warning, since this transport has no
-// authorization of its own.
-func (s *Server) startupBannerHTTP(addr string) string {
-	return s.bannerCore("streamable-http", httpURL(addr)) +
-		"\n  ⚠ UNAUTHENTICATED: anyone who can reach this address can call every tool — " +
-		"bind to loopback or front with an auth proxy/tunnel."
-}
-
-// bannerName / bannerVersion / toolCountPhrase are the shared pieces of every
-// boot banner, so the stdio and HTTP variants can't drift.
-func (s *Server) bannerName() string {
-	if s.opts.name == "" {
-		return "mcp"
-	}
-	return s.opts.name
-}
-
-func (s *Server) bannerVersion() string {
-	if s.opts.version == "" {
-		return "dev"
-	}
-	return s.opts.version
-}
-
-func (s *Server) toolCountPhrase() string {
-	word := "tools"
-	if len(s.tools) == 1 {
-		word = "tool"
-	}
-	return fmt.Sprintf("%d %s", len(s.tools), word)
-}
-
-// httpURL renders the MCP endpoint URL for a listen address, defaulting a bare
-// ":port" to localhost for a copy-pasteable banner.
-func httpURL(addr string) string {
-	host := addr
-	if len(addr) > 0 && addr[0] == ':' {
-		host = "localhost" + addr
-	}
-	return "http://" + host + mcpHTTPPath
-}
-
-func rootVersion(root *cobra.Command) string {
-	if root.Version != "" {
-		return root.Version
-	}
-	return "0.0.0"
-}

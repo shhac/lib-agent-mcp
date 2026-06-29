@@ -1,10 +1,5 @@
 package oauth
 
-import (
-	"encoding/json"
-	"sync"
-)
-
 // clientsStoreKey holds the JSON map of registered clients in the SecretStore.
 const clientsStoreKey = "clients"
 
@@ -29,15 +24,13 @@ func (c Client) allowsRedirect(uri string) bool {
 }
 
 // clientRegistry persists dynamically-registered clients via the SecretStore, so
-// a client stays registered across restarts. The whole map is stored under one
-// key; a mutex serializes the load-modify-save.
+// a client stays registered across restarts (one JSON map under one key).
 type clientRegistry struct {
-	store SecretStore
-	mu    sync.Mutex
+	clients jsonMapStore[Client]
 }
 
 func newClientRegistry(store SecretStore) *clientRegistry {
-	return &clientRegistry{store: store}
+	return &clientRegistry{clients: jsonMapStore[Client]{store: store, key: clientsStoreKey}}
 }
 
 // Register creates a client with a fresh id for the given redirect URIs and name.
@@ -47,15 +40,7 @@ func (r *clientRegistry) Register(redirectURIs []string, name string) (Client, e
 		return Client{}, err
 	}
 	c := Client{ID: id, RedirectURIs: redirectURIs, Name: name}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	m, err := r.load()
-	if err != nil {
-		return Client{}, err
-	}
-	m[id] = c
-	if err := r.save(m); err != nil {
+	if err := r.clients.mutate(func(m map[string]Client) bool { m[id] = c; return true }); err != nil {
 		return Client{}, err
 	}
 	return c, nil
@@ -63,35 +48,5 @@ func (r *clientRegistry) Register(redirectURIs []string, name string) (Client, e
 
 // Get returns the client for id and whether it is registered.
 func (r *clientRegistry) Get(id string) (Client, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	m, err := r.load()
-	if err != nil {
-		return Client{}, false, err
-	}
-	c, ok := m[id]
-	return c, ok, nil
-}
-
-func (r *clientRegistry) load() (map[string]Client, error) {
-	v, ok, err := r.store.Get(clientsStoreKey)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || v == "" {
-		return map[string]Client{}, nil
-	}
-	var m map[string]Client
-	if err := json.Unmarshal([]byte(v), &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (r *clientRegistry) save(m map[string]Client) error {
-	b, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return r.store.Set(clientsStoreKey, string(b))
+	return r.clients.get(id)
 }

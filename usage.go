@@ -36,9 +36,9 @@ TRANSPORTS
 REGISTER (stdio)
   Desktop clients (Claude Desktop / Cursor / VS Code / Windsurf): add to the
   mcpServers config —
-    {"mcpServers": {%[1]q: {"command": %[2]q, "args": ["mcp"]}}}
+    %[3]s
   Claude Code CLI:
-    claude mcp add %[1]s -- %[2]s mcp
+    %[4]s
 
 REMOTE (Streamable HTTP + self-contained OAuth 2.1)
   %[1]s mcp --http :8000 --oauth local --public-url https://host
@@ -72,5 +72,5 @@ KEY FLAGS
   --tailscale funnel|serve  auto-expose via Tailscale and derive --public-url
   --tailscale-port <port>   public HTTPS port for --tailscale (443|8443|10000)
   --access-log <path>       NDJSON request-log destination ("-" = stderr)`,
-		name, exec)
+		name, exec, mcpServersConfig(name, exec, false), claudeMcpAddLine(name, exec))
 }

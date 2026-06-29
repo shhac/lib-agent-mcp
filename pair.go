@@ -8,18 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// oauthService is the keyring service id the local-OAuth secrets live under —
-// shared by the running server (setupOAuth) and the `pair` maintenance commands,
-// so they always target the same namespace. Defaults to "<name>.mcp"; the host
-// app should override it (WithOAuthKeyringService) to match its own reverse-DNS
-// keyring service, e.g. "app.example.agent-foo.mcp".
-func (s *Server) oauthService() string {
-	if s.opts.oauthKeyringService != "" {
-		return s.opts.oauthKeyringService
-	}
-	return s.opts.name + ".mcp"
-}
-
 // pairCommand is `mcp pair`, the operator-facing maintenance surface for the
 // local-OAuth pairing code and stored secrets. It runs without starting the
 // server — it just reaches into the keyring namespace the server uses.
@@ -84,14 +72,4 @@ func pairCommand(s *Server) *cobra.Command {
 
 	pair.AddCommand(rotate, reset)
 	return pair
-}
-
-// oauthStore opens the keyring-backed secret store the local-OAuth layer uses,
-// erroring when no OS keyring is available (the secrets can't be read or changed).
-func (s *Server) oauthStore() (*oauth.KeyringStore, error) {
-	store := oauth.NewKeyringStore(s.oauthService())
-	if !store.Available() {
-		return nil, errors.New("no OS keyring is available on this host, so the local-OAuth secrets can't be read")
-	}
-	return store, nil
 }
