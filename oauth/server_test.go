@@ -404,3 +404,96 @@ func TestNewValidatesConfig(t *testing.T) {
 		t.Error("New without PublicURL should error")
 	}
 }
+
+func TestResourceDefaultsToPublicURL(t *testing.T) {
+	h := newHarness(t) // no Resource configured
+	if h.srv.resource != testPublicURL {
+		t.Errorf("resource = %q, want %q (default to PublicURL)", h.srv.resource, testPublicURL)
+	}
+	// With a bare-host resource there is no path-suffixed metadata document.
+	resp := h.get(t, ProtectedResourceMetadataPath+"/mcp")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("suffixed PRM with default resource = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestResourceBindsToMCPEndpoint covers the fix for the Claude connector: the
+// protected-resource identifier and token audience are the /mcp endpoint (not the
+// bare host), the AS stays the bare host, the RFC 9728 path-suffixed metadata is
+// served, and the 401 challenge points at it.
+func TestResourceBindsToMCPEndpoint(t *testing.T) {
+	const resource = testPublicURL + "/mcp"
+	store := NewMemStore()
+	srv, err := New(Config{Store: store, PublicURL: testPublicURL, Resource: resource})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	mux.Handle("/mcp", srv.Protect(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := ts.Client()
+
+	getJSON := func(path string) map[string]any {
+		resp, err := client.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		var m map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return m
+	}
+
+	// PRM advertises the /mcp endpoint as the resource; the AS stays the bare host.
+	prm := getJSON(ProtectedResourceMetadataPath)
+	if prm["resource"] != resource {
+		t.Errorf("PRM resource = %v, want %s", prm["resource"], resource)
+	}
+	if as, _ := prm["authorization_servers"].([]any); len(as) != 1 || as[0] != testPublicURL {
+		t.Errorf("authorization_servers = %v, want [%s]", prm["authorization_servers"], testPublicURL)
+	}
+
+	// The RFC 9728 path-suffixed metadata document is served and agrees.
+	if sub := getJSON(ProtectedResourceMetadataPath + "/mcp"); sub["resource"] != resource {
+		t.Errorf("suffixed PRM resource = %v, want %s", sub["resource"], resource)
+	}
+
+	// The 401 challenge points at the path-suffixed metadata, not the bare one.
+	resp, err := client.Get(ts.URL + "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	wantMeta := ProtectedResourceMetadataPath + "/mcp"
+	if wa := resp.Header.Get("WWW-Authenticate"); !strings.Contains(wa, wantMeta) {
+		t.Errorf("challenge = %q, want resource_metadata containing %q", wa, wantMeta)
+	}
+
+	// Tokens are bound to the resource audience: a server sharing the signing key
+	// but bound to the bare-host audience must reject them.
+	if srv.issuer.audience != resource {
+		t.Errorf("issuer audience = %q, want %q", srv.issuer.audience, resource)
+	}
+	tok, _, err := srv.issuer.Mint("client-1", "mcp")
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if _, err := srv.issuer.Validate(tok); err != nil {
+		t.Errorf("resource-bound token rejected by its own issuer: %v", err)
+	}
+	bareHost, err := New(Config{Store: store, PublicURL: testPublicURL}) // same key, audience = bare host
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := bareHost.issuer.Validate(tok); err == nil {
+		t.Error("token bound to the /mcp resource was accepted by a bare-host-audience server")
+	}
+}

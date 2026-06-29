@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/shhac/lib-agent-mcp/oauth"
 )
@@ -30,7 +31,10 @@ func (s *Server) setupOAuth(mode, publicURL string) error {
 		return errors.New("--oauth local needs an OS keyring to store its signing key, but none is available on this host")
 	}
 
-	osrv, err := oauth.New(oauth.Config{Store: store, PublicURL: publicURL})
+	// The protected resource is the /mcp endpoint, not the bare host: the client
+	// binds the token audience to the exact URL it calls.
+	resource := strings.TrimRight(publicURL, "/") + mcpHTTPPath
+	osrv, err := oauth.New(oauth.Config{Store: store, PublicURL: publicURL, Resource: resource})
 	if err != nil {
 		return err
 	}
@@ -54,13 +58,13 @@ func (s *Server) writeOAuthBootInfo(w io.Writer, addr, publicURL string) error {
 	if err != nil {
 		return err
 	}
+	endpoint := strings.TrimRight(publicURL, "/") + mcpHTTPPath
 	_, err = fmt.Fprintf(w, `Connect this MCP server (OAuth 2.1, local — it is its own authorization server):
-  public URL     : %s          ← add this to the connector
-  MCP endpoint   : %s/mcp
+  connector URL  : %s          ← add this exact URL (with /mcp) to the connector
   local listener : %s
   pairing code   : %s
   ⚠ Treat the pairing code like a password. Enter it once on the browser
     approval page when a client connects; it is reusable across clients.
-`, publicURL, publicURL, httpURL(addr), code)
+`, endpoint, httpURL(addr), code)
 	return err
 }

@@ -32,23 +32,32 @@ authority.
    tokens) — reserved, not built now. `--oauth local` **requires** `--http`
    (you cannot OAuth a stdio pipe); `--oauth` without `--http` is a hard error.
 2. **`--public-url <https-url>` is required with `--oauth local`.** Behind a
-   tunnel the server can't infer its externally-reachable URL, and that URL is
-   load-bearing: it is the token **audience** (RFC 8707) and, in local mode, the
-   **issuer**. Keep it the **root** (no path) so the `.well-known` documents sit
-   cleanly at the root.
+   tunnel the server can't infer its externally-reachable URL. Pass it as the
+   **root** (no path): it is the **issuer** and the base from which the
+   `.well-known` + `/oauth/*` documents are served. The **protected resource**
+   (and token **audience**, RFC 8707) is *not* the root — it is the **`/mcp`
+   endpoint** (`<public-url>/mcp`), because a client binds the audience to the
+   exact URL it calls (Claude's connector POSTs MCP to the registered path and
+   rejects a resource that doesn't match it). The library derives the resource by
+   appending the MCP path; the operator still passes only the root.
 3. **Endpoint layout.** The two discovery documents live at their **RFC-mandated
    well-known paths** (RFC 8615) and **cannot be moved**; everything else we own
    is namespaced under `/oauth/` to avoid polluting the server:
    ```
-   /mcp                                       resource (now gated)
+   /mcp                                       resource = audience (now gated)
    /.well-known/oauth-protected-resource      RFC 9728 PRM (static JSON, mandated path)
+   /.well-known/oauth-protected-resource/mcp  same PRM, RFC 9728 path-suffixed for the /mcp resource
    /.well-known/oauth-authorization-server    RFC 8414 AS metadata (static JSON, mandated path)
    /oauth/register                            RFC 7591 Dynamic Client Registration
    /oauth/authorize                           authorization endpoint (human approval)
    /oauth/token                               token endpoint (code+PKCE → token)
    ```
    The well-known JSON just *advertises* the `/oauth/*` paths, so namespacing is
-   free.
+   free. RFC 9728 locates a path-bearing resource's metadata at the **suffixed**
+   path; some clients construct that URL instead of following the 401 challenge,
+   so the PRM is served at both. The `/oauth/*` endpoints are **not** aliased at
+   the root — a spec-compliant client (the Claude connector included, verified by
+   capture) finds them through the AS metadata's `*_endpoint` URLs.
 4. **Pairing code** is our local user-auth factor at `/authorize` (see below).
    It is **not** an OAuth `client_secret` (per-client) and **not** an RFC 8628
    device `user_code` — it's our term for a reusable bootstrap secret.
@@ -66,9 +75,10 @@ authority.
 The server is AS + RS. Claude automates everything except the one-time human
 approval (step 6):
 
-1. User pastes `https://<public-url>/mcp` into the Connector.
+1. User pastes `https://<public-url>/mcp` into the Connector (the **`/mcp` path is
+   required** — it is the resource identifier; the bare host would post MCP to `/`).
 2. Client POSTs `/mcp` with no token → **401** + `WWW-Authenticate: Bearer
-   resource_metadata="https://<public-url>/.well-known/oauth-protected-resource"`.
+   resource_metadata="https://<public-url>/.well-known/oauth-protected-resource/mcp"`.
 3. Client GETs the PRM → learns the AS is this same server.
 4. Client GETs `/.well-known/oauth-authorization-server` → endpoint URLs.
 5. Client **self-registers** at `/oauth/register` (DCR) → gets a `client_id`
@@ -82,7 +92,7 @@ approval (step 6):
    (unexpired, unused, PKCE `S256(verifier)==challenge`, redirect/client match)
    → mints an **audience-bound** access token (+ refresh token).
 8. Client re-POSTs `/mcp` with `Authorization: Bearer …` → RS validates
-   (signature, `aud == public-url`, not expired, scope) → tools flow.
+   (signature, `aud == <public-url>/mcp`, not expired, scope) → tools flow.
 9. On expiry the client refreshes (or re-auths); the human does **not** repeat
    step 6.
 
@@ -115,8 +125,9 @@ approval (step 6):
 
 - **Access token = JWT**, signed by the server **signing key** (HS256 or
   EdDSA — decide at build; EdDSA/asymmetric is cleaner if we ever expose a JWKS,
-  HS256 is simplest for self-contained). Claims: `iss`=public-url,
-  `aud`=public-url (RFC 8707 audience binding), `exp` short (e.g. 1h), `sub`/`cid`
+  HS256 is simplest for self-contained). Claims: `iss`=public-url (root),
+  `aud`=`<public-url>/mcp` (the resource — RFC 8707 audience binding), `exp` short
+  (e.g. 1h), `sub`/`cid`
   = client_id, `scope`. **Stateless validation** — the RS needs only the signing
   key, no token store.
 - **Refresh tokens** are stored (opaque, in `SecretStore`) so they can be rotated

@@ -7,7 +7,7 @@ import "net/http"
 // scopes it understands, so a 401 can bootstrap discovery.
 func (s *Server) handleProtectedResourceMetadata(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"resource":                 s.publicURL,
+		"resource":                 s.resource,
 		"authorization_servers":    []string{s.publicURL},
 		"scopes_supported":         s.scopes,
 		"bearer_methods_supported": []string{"header"},

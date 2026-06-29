@@ -11,3 +11,7 @@ go.work.sum
 # OS / editor
 .DS_Store
 *.swp
+
+# Local caches (Go build cache, AI planning)
+.cache/
+.ai-cache/
