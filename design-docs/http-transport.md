@@ -19,13 +19,14 @@ additive layers:
 - **Phase 1 — transport (shipped).** `mcp --http <addr>` serves Streamable
   HTTP. **No authorization.** Useful on loopback, on a trusted network, behind
   an MCP-aware authenticating edge, or fronted by a tunnel that does auth.
-- **Phase 2 — authorization (planned).** An additive `--oauth <issuer>` layer
-  makes the server an OAuth 2.1 **Resource Server**: it serves Protected
-  Resource Metadata (RFC 9728), challenges with `401 + WWW-Authenticate`, and
-  validates audience-bound bearer tokens (RFC 8707) issued by the named
-  Authorization Server. `--oauth` requires `--http`; its absence leaves Phase 1
-  untouched. (A self-contained minimal AS, if ever wanted, would be a separate
-  mode — it needs more than a URL: a signing key, a store, an approval policy.)
+- **Phase 2 — authorization (planned, designed).** An additive `--oauth` layer.
+  The chosen first mode is **`--oauth local`**: the server is its own OAuth 2.1
+  Authorization Server *and* Resource Server (no third party), gating `/mcp`
+  behind audience-bound JWTs it mints itself, with a local **pairing code** as
+  the approval factor. `--oauth requires --http`; its absence leaves Phase 1
+  untouched. A future `--oauth <issuer-url>` selects delegate mode (RS-only). The
+  full plan — endpoints, pairing code, token model, secret storage, milestones —
+  is in **[oauth.md](oauth.md)**.
 
 The secret-storage boundary for Phase 2: MCP authorization secrets (signing
 key, client registrations, issued tokens) live in their **own** store owned by
