@@ -3,6 +3,7 @@ module github.com/shhac/lib-agent-mcp
 go 1.26
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/shhac/lib-agent-output v0.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
