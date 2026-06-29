@@ -48,6 +48,10 @@ func TestKeyringStoreUnavailableIsErr(t *testing.T) {
 	if err := s.Delete("k"); !errors.Is(err, ErrStoreUnavailable) {
 		t.Errorf("Delete = %v, want ErrStoreUnavailable", err)
 	}
+	// The `pair reset` wipe must also refuse to silently no-op on a degraded host.
+	if err := s.DeleteAll(); !errors.Is(err, ErrStoreUnavailable) {
+		t.Errorf("DeleteAll = %v, want ErrStoreUnavailable", err)
+	}
 }
 
 // storeContract is satisfied by both implementations — a compile-time guard that

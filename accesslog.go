@@ -43,23 +43,23 @@ func (a *accessLogger) Close() error {
 // middleware wraps next, logging each request once it completes.
 func (a *accessLogger) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		started := time.Now()
 		sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		a.write(r, sw.status, sw.bytes, time.Since(start))
+		a.write(r, sw.status, sw.bytes, started)
 	})
 }
 
 // write emits one NDJSON entry. Empty header fields are omitted to keep lines
 // lean; Authorization/Cookie are deliberately never included.
-func (a *accessLogger) write(r *http.Request, status, bytes int, dur time.Duration) {
+func (a *accessLogger) write(r *http.Request, status, bytes int, started time.Time) {
 	entry := map[string]any{
-		"time":   start(dur),
+		"time":   started.Format(time.RFC3339Nano),
 		"method": r.Method,
 		"path":   r.URL.Path,
 		"status": status,
 		"bytes":  bytes,
-		"dur_ms": dur.Milliseconds(),
+		"dur_ms": time.Since(started).Milliseconds(),
 	}
 	for field, header := range map[string]string{
 		"origin":        "Origin",
@@ -78,12 +78,6 @@ func (a *accessLogger) write(r *http.Request, status, bytes int, dur time.Durati
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, _ = a.w.Write(append(b, '\n'))
-}
-
-// start renders the request's wall-clock start time as RFC3339 (now minus the
-// elapsed duration), so the entry timestamps when the request arrived.
-func start(elapsed time.Duration) string {
-	return time.Now().Add(-elapsed).Format(time.RFC3339Nano)
 }
 
 // statusRecorder captures the status code and byte count of a response so the

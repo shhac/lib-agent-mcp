@@ -299,6 +299,32 @@ func TestAuthorizeUnknownClientIsFatal(t *testing.T) {
 	}
 }
 
+// TestAuthorizeMismatchedRedirectIsFatal is the open-redirect guard: a registered
+// client presenting a redirect_uri it never registered must hit a fatal error
+// page (400) with no Location — the auth code is never redirected anywhere, so it
+// can't be exfiltrated to an attacker-controlled URL.
+func TestAuthorizeMismatchedRedirectIsFatal(t *testing.T) {
+	h := newHarness(t)
+	clientID := h.registerClient(t) // registers testRedirect only
+	q := url.Values{
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://evil.example/cb"},
+		"response_type":         {"code"},
+		"code_challenge":        {challengeFor(testVerifier)},
+		"code_challenge_method": {"S256"},
+		"state":                 {"xyz"},
+		"scope":                 {"mcp"},
+	}
+	resp := h.get(t, AuthorizePath+"?"+q.Encode())
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("mismatched redirect status = %d, want 400", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "" {
+		t.Errorf("must not redirect on an unregistered redirect_uri, got Location=%q", loc)
+	}
+}
+
 func TestConsumedCodeCannotBeReused(t *testing.T) {
 	h := newHarness(t)
 	pairing, _ := h.srv.PairingCode()

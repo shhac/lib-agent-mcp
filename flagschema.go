@@ -76,3 +76,46 @@ func sliceItemType(flagType string) string {
 		return "string"
 	}
 }
+
+// visitFlags calls fn for each schema-visible flag of cmd — local plus inherited
+// persistent, de-duped, minus the flags flagSkipped hides (infra globals, --yes,
+// mcp.hidden).
+func (s *Server) visitFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) {
+	seen := map[string]bool{}
+	visit := func(f *pflag.Flag) {
+		if s.flagSkipped(f) || seen[f.Name] {
+			return
+		}
+		seen[f.Name] = true
+		fn(f, flagRequired(f))
+	}
+	cmd.LocalFlags().VisitAll(visit)
+	cmd.InheritedFlags().VisitAll(visit)
+}
+
+// visitLocalFlags visits a command's own (non-inherited) schema-visible flags
+// only. Group help uses it so each subcommand line shows just its distinctive
+// flags; the flags every subcommand inherits are listed once at the group level.
+func (s *Server) visitLocalFlags(cmd *cobra.Command, fn func(f *pflag.Flag, required bool)) {
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if s.flagSkipped(f) {
+			return
+		}
+		fn(f, flagRequired(f))
+	})
+}
+
+// flagSkipped reports whether a flag is kept out of every schema/help surface:
+// the --yes confirm flag (the bridge injects it, the model must not set it),
+// cobra-hidden flags, infra globals (format/debug/timeout/help or
+// WithHiddenFlags), or flags marked mcp.hidden.
+func (s *Server) flagSkipped(f *pflag.Flag) bool {
+	return f.Name == "yes" || f.Hidden || s.opts.hiddenFlags[f.Name] ||
+		f.Annotations[AnnotationFlagHidden] != nil
+}
+
+// flagRequired reports whether cobra marked f as a required flag.
+func flagRequired(f *pflag.Flag) bool {
+	_, required := f.Annotations[cobra.BashCompOneRequiredFlag]
+	return required
+}

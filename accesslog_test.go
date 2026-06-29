@@ -68,7 +68,7 @@ func TestNewAccessLoggerFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAccessLogger: %v", err)
 	}
-	al.write(httptest.NewRequest(http.MethodGet, "/x", nil), 200, 5, time.Millisecond)
+	al.write(httptest.NewRequest(http.MethodGet, "/x", nil), 200, 5, time.Now())
 	if err := al.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
