@@ -53,7 +53,8 @@ func (s *Server) serveHTTP(ctx context.Context, ln net.Listener) error {
 	return nil
 }
 
-// httpHandler maps the single MCP endpoint.
+// httpHandler maps the single MCP endpoint (plus the OAuth routes when enabled),
+// wrapped in CORS so browser-based clients (a remote MCP connector) can reach it.
 func (s *Server) httpHandler() http.Handler {
 	mux := http.NewServeMux()
 	if s.oauth != nil {
@@ -61,10 +62,34 @@ func (s *Server) httpHandler() http.Handler {
 		// /mcp behind a valid bearer token.
 		s.oauth.RegisterRoutes(mux)
 		mux.Handle(mcpHTTPPath, s.oauth.Protect(http.HandlerFunc(s.handleHTTP)))
-		return mux
+	} else {
+		mux.HandleFunc(mcpHTTPPath, s.handleHTTP)
 	}
-	mux.HandleFunc(mcpHTTPPath, s.handleHTTP)
-	return mux
+	return withCORS(mux)
+}
+
+// withCORS lets a browser-based MCP client (e.g. the remote Custom Connector,
+// which validates from the page) reach the server: it answers the CORS preflight
+// (OPTIONS) itself — un-authenticated, so it isn't 401'd — and adds the
+// Access-Control-* headers to every response. The Origin is reflected because the
+// access gate is the bearer token, not the origin; WWW-Authenticate is exposed so
+// the browser can read the OAuth challenge that bootstraps discovery.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Add("Vary", "Origin")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, MCP-Protocol-Version")
+			h.Set("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleHTTP serves /mcp. POST carries one JSON-RPC message; GET (server-

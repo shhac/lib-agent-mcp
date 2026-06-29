@@ -94,6 +94,52 @@ func TestWriteOAuthBootInfo(t *testing.T) {
 	}
 }
 
+func TestOAuthCORSPreflightNotGated(t *testing.T) {
+	s := newServer(testRoot())
+	osrv, err := oauth.New(oauth.Config{Store: oauth.NewMemStore(), PublicURL: "https://mcp.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.oauth = osrv
+	ts := httptest.NewServer(s.httpHandler())
+	defer ts.Close()
+
+	// A browser preflight must NOT be 401'd by the OAuth gate — it must return
+	// the CORS headers so the real request is allowed.
+	req, _ := http.NewRequest(http.MethodOptions, ts.URL+mcpHTTPPath, nil)
+	req.Header.Set("Origin", "https://claude.ai")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("OAuth preflight status = %d, want 204 (not gated)", resp.StatusCode)
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "https://claude.ai" {
+		t.Error("preflight missing Allow-Origin")
+	}
+
+	// The 401 challenge itself must carry CORS headers so the browser can read
+	// the WWW-Authenticate and start discovery.
+	preq, _ := http.NewRequest(http.MethodPost, ts.URL+mcpHTTPPath, strings.NewReader(`{}`))
+	preq.Header.Set("Origin", "https://claude.ai")
+	presp, err := http.DefaultClient.Do(preq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	presp.Body.Close()
+	if presp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", presp.StatusCode)
+	}
+	if presp.Header.Get("Access-Control-Allow-Origin") != "https://claude.ai" {
+		t.Error("401 challenge missing Access-Control-Allow-Origin")
+	}
+	if !strings.Contains(presp.Header.Get("Access-Control-Expose-Headers"), "WWW-Authenticate") {
+		t.Error("WWW-Authenticate not exposed via CORS")
+	}
+}
+
 func TestHTTPHandlerNoOAuthLeavesMCPOpen(t *testing.T) {
 	s := newServer(testRoot()) // no oauth
 	ts := httptest.NewServer(s.httpHandler())

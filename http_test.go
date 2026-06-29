@@ -155,6 +155,41 @@ func TestHTTPURL(t *testing.T) {
 	}
 }
 
+func TestCORSPreflight(t *testing.T) {
+	client, url := httpTestServer(t)
+	req, _ := http.NewRequest(http.MethodOptions, url, nil)
+	req.Header.Set("Origin", "https://claude.ai")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("preflight status = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://claude.ai" {
+		t.Errorf("Allow-Origin = %q, want the request origin", got)
+	}
+	if !strings.Contains(resp.Header.Get("Access-Control-Allow-Methods"), "POST") {
+		t.Errorf("Allow-Methods = %q, want POST", resp.Header.Get("Access-Control-Allow-Methods"))
+	}
+}
+
+func TestCORSHeaderOnResponse(t *testing.T) {
+	client, url := httpTestServer(t)
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	req.Header.Set("Origin", "https://claude.ai")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://claude.ai" {
+		t.Errorf("Allow-Origin on response = %q, want the request origin", got)
+	}
+}
+
 func TestServeHTTPListensAndShutsDown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
