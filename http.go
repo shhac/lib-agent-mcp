@@ -56,6 +56,13 @@ func (s *Server) serveHTTP(ctx context.Context, ln net.Listener) error {
 // httpHandler maps the single MCP endpoint.
 func (s *Server) httpHandler() http.Handler {
 	mux := http.NewServeMux()
+	if s.oauth != nil {
+		// Local OAuth: serve the discovery + authorization endpoints and gate
+		// /mcp behind a valid bearer token.
+		s.oauth.RegisterRoutes(mux)
+		mux.Handle(mcpHTTPPath, s.oauth.Protect(http.HandlerFunc(s.handleHTTP)))
+		return mux
+	}
 	mux.HandleFunc(mcpHTTPPath, s.handleHTTP)
 	return mux
 }

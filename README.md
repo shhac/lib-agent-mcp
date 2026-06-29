@@ -46,12 +46,21 @@ the form local clients (Claude Desktop, Claude Code) launch directly.
 — the server never initiates streams). This is the shape a remote MCP client
 reaches over a URL.
 
-> ⚠ **The HTTP transport is unauthenticated.** Any caller that can reach the
-> address can invoke every exposed tool. Bind it to loopback (`--http
-> 127.0.0.1:8000`) or put an authenticating proxy/tunnel in front before
-> exposing it. A remote connector that requires the MCP OAuth handshake needs an
-> auth layer in front (an MCP-aware edge today; an additive `--oauth` layer is
-> the planned next phase).
+> ⚠ **The plain HTTP transport is unauthenticated.** Any caller that can reach
+> the address can invoke every exposed tool. Bind it to loopback (`--http
+> 127.0.0.1:8000`), front it with an authenticating proxy/tunnel, or use
+> `--oauth local` (below).
+
+**Local OAuth** — `mycli mcp --http :8000 --oauth local --public-url https://your-tunnel.example`.
+The server becomes its **own** OAuth 2.1 authorization + resource server (no third
+party), which is what a remote Claude Custom Connector requires. It serves the
+discovery documents and `/oauth/{register,authorize,token}`, and gates `/mcp`
+behind audience-bound JWTs it mints itself. A human approves a connection once by
+entering a **pairing code** (printed to stdout at boot, stored in the OS keyring)
+on the browser approval page; the code is reusable, so multiple clients can
+connect. `--public-url` is the externally-reachable HTTPS URL (the token audience
+/ issuer); TLS is terminated by your tunnel/edge. Override the keyring namespace
+with `WithOAuthKeyringService`. Full design: [design-docs/oauth.md](design-docs/oauth.md).
 
 ## How it works
 

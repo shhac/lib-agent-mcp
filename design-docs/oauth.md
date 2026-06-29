@@ -1,10 +1,14 @@
 # lib-agent-mcp: local OAuth (Phase 2 of the HTTP transport)
 
-> Status: **design / not yet built.** This document is written to survive a
-> context reset — it captures the full plan and every decision made, so a fresh
-> session can implement it without re-deriving anything. Phase 1 (the `--http`
-> Streamable HTTP transport) is **shipped** (see [http-transport.md](http-transport.md));
-> this is the additive authorization layer on top of it.
+> Status: **implemented** (in the `oauth/` package, wired via `mcp --http --oauth
+> local --public-url <url>`). This document captures the full design and every
+> decision; the code follows it. Phase 1 (the `--http` transport) is in
+> [http-transport.md](http-transport.md); this is the additive authorization
+> layer on top of it. The package layout: `oauth/store.go` (SecretStore seam +
+> keyring/mem impls), `token.go` (JWT issuer), `pairing.go` (pairing code),
+> `pkce.go`/`authcode.go`/`clients.go`/`refresh.go` (AS state), and
+> `server.go`/`metadata.go`/`register.go`/`authorize.go`/`grant.go` (the HTTP
+> endpoints + the `Protect` RS gate).
 
 ## Why
 

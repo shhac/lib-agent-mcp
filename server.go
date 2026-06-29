@@ -3,7 +3,9 @@ package agentmcp
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/shhac/lib-agent-mcp/oauth"
 	output "github.com/shhac/lib-agent-output"
 	"github.com/spf13/cobra"
 )
@@ -76,6 +78,11 @@ type options struct {
 	fileRoots       []output.FileRoot
 	fileToolName    string
 	fileInlineLimit int64
+
+	// oauthKeyringService overrides the keyring service id under which the
+	// local-OAuth secrets are stored (default "<name>.mcp"). It is kept distinct
+	// from a CLI's own API-credential service so the two never mix.
+	oauthKeyringService string
 }
 
 // Option configures the MCP server.
@@ -127,6 +134,14 @@ func WithFileInlineLimit(bytes int64) Option {
 	return func(o *options) { o.fileInlineLimit = bytes }
 }
 
+// WithOAuthKeyringService overrides the keyring service id under which the
+// local-OAuth layer stores its secrets (default "<root-name>.mcp"). Set it to a
+// reverse-DNS id matching your app's convention; it must differ from the CLI's
+// own credential service so the two trust domains stay separate.
+func WithOAuthKeyringService(service string) Option {
+	return func(o *options) { o.oauthKeyringService = service }
+}
+
 // WithExecutable overrides the binary used to run tool calls. Defaults to the
 // running binary (os.Executable); primarily useful in tests.
 func WithExecutable(path string) Option {
@@ -141,6 +156,10 @@ type Server struct {
 	opts        options
 	tools       []Tool
 	toolsByName map[string]*Tool
+
+	// oauth, when non-nil, is the local OAuth server gating the HTTP transport.
+	// It is built from --oauth local at serve time, not construction.
+	oauth *oauth.Server
 }
 
 var defaultHiddenFlags = []string{"format", "debug", "timeout", "help"}
@@ -175,16 +194,27 @@ func newServer(root *cobra.Command, opts ...Option) *Server {
 //	root.AddCommand(agentmcp.Command(root))
 func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	s := newServer(root, opts...)
-	var httpAddr string
+	var httpAddr, oauthMode, publicURL string
 	cmd := &cobra.Command{
 		Use:         "mcp",
 		Short:       "Run as an MCP server (stdio by default, or --http <addr>)",
 		Annotations: map[string]string{AnnotationSkip: "true"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// The Streamable HTTP transport is unauthenticated: it is opt-in via
-			// --http and prints a warning so it isn't exposed unguarded.
+			// The Streamable HTTP transport is opt-in via --http. It is
+			// unauthenticated unless --oauth local makes the server its own OAuth
+			// authorization + resource server.
 			if httpAddr != "" {
-				fmt.Fprintln(os.Stderr, s.startupBannerHTTP(httpAddr))
+				if err := s.setupOAuth(oauthMode, publicURL); err != nil {
+					return err
+				}
+				if s.oauth != nil {
+					fmt.Fprintln(os.Stderr, s.startupBannerHTTPOAuth(httpAddr))
+					if err := s.writeOAuthBootInfo(os.Stdout, httpAddr, publicURL); err != nil {
+						return err
+					}
+				} else {
+					fmt.Fprintln(os.Stderr, s.startupBannerHTTP(httpAddr))
+				}
 				return s.ServeHTTP(cmd.Context(), httpAddr)
 			}
 			// Boot notice goes to STDERR: stdout carries the JSON-RPC stream and
@@ -202,7 +232,12 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&httpAddr, "http", "",
 		"Serve the Streamable HTTP transport on this address (e.g. :8000) instead of stdio. "+
-			"Unauthenticated — bind to loopback or front with an auth proxy.")
+			"Unauthenticated unless --oauth is set — bind to loopback or front with an auth proxy.")
+	cmd.Flags().StringVar(&oauthMode, "oauth", "",
+		`Enable OAuth on the HTTP transport. Only "local" is supported: the server is its own `+
+			"OAuth 2.1 authorization server. Requires --http and --public-url.")
+	cmd.Flags().StringVar(&publicURL, "public-url", "",
+		"Externally-reachable https URL of this server (the OAuth token audience/issuer); required with --oauth.")
 	return cmd
 }
 
@@ -249,18 +284,31 @@ Now waiting for an MCP client to connect on stdin — press Ctrl-C to exit.`,
 // boots, so an operator watching the process sees that it came up, what it is,
 // and how it's listening.
 func (s *Server) startupBanner() string {
-	return fmt.Sprintf("%s %s — MCP server ready · transport: stdio · %s · protocol %s",
-		s.bannerName(), s.bannerVersion(), s.toolCountPhrase(), defaultProtocolVersion)
+	return s.bannerCore("stdio", "")
+}
+
+// bannerCore builds the common boot-banner line shared by every transport:
+// "<name> <version> — MCP server ready · transport: <t> [· <location>] · <tools>
+// · protocol <v>". The transport variants append their own warning or suffix.
+func (s *Server) bannerCore(transport, location string) string {
+	parts := []string{
+		fmt.Sprintf("%s %s — MCP server ready", s.bannerName(), s.bannerVersion()),
+		"transport: " + transport,
+	}
+	if location != "" {
+		parts = append(parts, location)
+	}
+	parts = append(parts, s.toolCountPhrase(), "protocol "+defaultProtocolVersion)
+	return strings.Join(parts, " · ")
 }
 
 // startupBannerHTTP is the boot notice for the Streamable HTTP transport. It
 // names the URL and carries an unmissable warning, since this transport has no
 // authorization of its own.
 func (s *Server) startupBannerHTTP(addr string) string {
-	return fmt.Sprintf("%s %s — MCP server ready · transport: streamable-http · %s · %s · protocol %s\n"+
-		"  ⚠ UNAUTHENTICATED: anyone who can reach this address can call every tool — "+
-		"bind to loopback or front with an auth proxy/tunnel.",
-		s.bannerName(), s.bannerVersion(), httpURL(addr), s.toolCountPhrase(), defaultProtocolVersion)
+	return s.bannerCore("streamable-http", httpURL(addr)) +
+		"\n  ⚠ UNAUTHENTICATED: anyone who can reach this address can call every tool — " +
+		"bind to loopback or front with an auth proxy/tunnel."
 }
 
 // bannerName / bannerVersion / toolCountPhrase are the shared pieces of every
