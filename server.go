@@ -26,6 +26,10 @@ type Server struct {
 	// It is built from --oauth local at serve time, not construction.
 	oauth *oauth.Server
 
+	// openOAuthStore, when non-nil, overrides how the local-OAuth secret store is
+	// opened — a test seam so the pair commands can run against a MemStore.
+	openOAuthStore func() (oauthSecretStore, error)
+
 	// accessLog, when non-nil, records one NDJSON line per HTTP request. It is
 	// built from --access-log at serve time.
 	accessLog *accessLogger

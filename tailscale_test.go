@@ -11,6 +11,7 @@ type fakeRunner struct {
 	calls      [][]string
 	statusJSON string
 	runErr     error
+	outErr     error
 }
 
 func (f *fakeRunner) run(_ context.Context, name string, args ...string) error {
@@ -20,7 +21,7 @@ func (f *fakeRunner) run(_ context.Context, name string, args ...string) error {
 
 func (f *fakeRunner) output(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
-	return []byte(f.statusJSON), nil
+	return []byte(f.statusJSON), f.outErr
 }
 
 func argsEqual(a []string, b ...string) bool {
@@ -84,6 +85,25 @@ func TestTailscalePublicURL(t *testing.T) {
 	empty := &fakeRunner{statusJSON: `{"Self":{"DNSName":""}}`}
 	if _, err := tailscalePublicURL(context.Background(), empty, "tailscale", 443); err == nil {
 		t.Error("empty MagicDNS name should error")
+	}
+
+	statusErr := &fakeRunner{outErr: context.DeadlineExceeded}
+	if _, err := tailscalePublicURL(context.Background(), statusErr, "tailscale", 443); err == nil {
+		t.Error("a `tailscale status` failure should surface an error")
+	}
+
+	badJSON := &fakeRunner{statusJSON: "{not json"}
+	if _, err := tailscalePublicURL(context.Background(), badJSON, "tailscale", 443); err == nil {
+		t.Error("unparseable status JSON should error")
+	}
+}
+
+func TestTailscaleRequiresHTTP(t *testing.T) {
+	cmd := Command(testRoot())
+	cmd.SetArgs([]string{"--tailscale", "funnel"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--tailscale requires --http") {
+		t.Errorf("--tailscale without --http: err = %v, want a '--tailscale requires --http' error", err)
 	}
 }
 

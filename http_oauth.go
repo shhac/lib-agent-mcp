@@ -21,10 +21,22 @@ func (s *Server) oauthService() string {
 	return s.opts.name + ".mcp"
 }
 
+// oauthSecretStore is the store surface the OAuth layer and the `pair`
+// maintenance commands need: the persisted secrets, plus the namespace-wide wipe
+// for `pair reset`. Both *oauth.KeyringStore and *oauth.MemStore satisfy it.
+type oauthSecretStore interface {
+	oauth.SecretStore
+	DeleteAll() error
+}
+
 // oauthStore opens the keyring-backed secret store the local-OAuth layer uses,
 // erroring when no OS keyring is available (the secrets can't be read or changed).
-// It is the single definition of how the OAuth store is opened and checked.
-func (s *Server) oauthStore() (*oauth.KeyringStore, error) {
+// It is the single definition of how the OAuth store is opened and checked; tests
+// inject openOAuthStore to avoid a real keyring.
+func (s *Server) oauthStore() (oauthSecretStore, error) {
+	if s.openOAuthStore != nil {
+		return s.openOAuthStore()
+	}
 	store := oauth.NewKeyringStore(s.oauthService())
 	if !store.Available() {
 		return nil, errors.New("no OS keyring is available on this host, so the local-OAuth secrets can't be read")

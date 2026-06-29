@@ -120,3 +120,12 @@ func (s *MemStore) Delete(key string) error {
 	delete(s.m, key)
 	return nil
 }
+
+// DeleteAll clears every key, mirroring KeyringStore.DeleteAll so tests can
+// exercise the `pair reset` wipe without a real keyring.
+func (s *MemStore) DeleteAll() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m = map[string]string{}
+	return nil
+}

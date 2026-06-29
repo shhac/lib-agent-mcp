@@ -23,12 +23,15 @@ func TestAccessLoggerWritesNDJSONAndRedacts(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	req.Header.Set("Origin", "https://claude.ai")
 	req.Header.Set("Authorization", "Bearer super-secret-token")
+	req.Header.Set("Cookie", "session=super-secret-cookie")
 	req.Header.Set("MCP-Protocol-Version", "2025-06-18")
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	line := strings.TrimSpace(buf.String())
-	if strings.Contains(line, "super-secret-token") || strings.Contains(line, "Authorization") {
-		t.Fatalf("access log leaked the bearer token: %q", line)
+	for _, secret := range []string{"super-secret-token", "Authorization", "super-secret-cookie", "Cookie"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("access log leaked %q: %s", secret, line)
+		}
 	}
 
 	var e map[string]any
