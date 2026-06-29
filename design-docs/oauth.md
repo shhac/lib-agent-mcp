@@ -109,9 +109,19 @@ approval (step 6):
   ```
   Generous entropy because it guards tools acting with the user's real creds.
 - **Lifecycle.** **Generated if absent, then persisted** (stable across
-  restarts — you don't re-pair every launch). **Regenerable** via a rotate path.
+  restarts — you don't re-pair every launch). **Regenerable** via the operator
+  commands:
+  - `mcp pair rotate` — issue a fresh code if it leaks. Existing connections keep
+    their tokens; only *new* pairings need the new code.
+  - `mcp pair reset --yes` — the bigger hammer for a suspected token compromise:
+    wipes the whole MCP keyring namespace (signing key → every issued access/
+    refresh token is invalidated, registered clients, and the pairing code). A
+    fresh signing key + code regenerate on next boot; every client must
+    re-register and re-pair. Rotating the PIN alone does **not** revoke tokens an
+    attacker already holds — that's what `reset` is for.
 - **Storage.** In the keyring through `SecretStore`, under the MCP namespace
-  (separate from CLI creds).
+  (separate from CLI creds — the host app supplies its reverse-DNS service plus a
+  `.mcp` suffix, e.g. `app.example.agent-foo.mcp`).
 - **Reusable, not single-use.** Every harness (Claude, Codex, …) pairs with the
   **same** code; the single-use artifact is the OAuth *authorization code* at
   step 6/7. This is what makes multiple concurrent connections work.

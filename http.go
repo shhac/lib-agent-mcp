@@ -65,7 +65,11 @@ func (s *Server) httpHandler() http.Handler {
 	} else {
 		mux.HandleFunc(mcpHTTPPath, s.handleHTTP)
 	}
-	return withCORS(mux)
+	h := withCORS(mux)
+	if s.accessLog != nil {
+		h = s.accessLog.middleware(h)
+	}
+	return h
 }
 
 // withCORS lets a browser-based MCP client (e.g. the remote Custom Connector,

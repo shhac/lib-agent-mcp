@@ -22,11 +22,7 @@ func (s *Server) setupOAuth(mode, publicURL string) error {
 		return errors.New("--oauth local requires --public-url <https-url> (the externally-reachable URL of this server)")
 	}
 
-	service := s.opts.oauthKeyringService
-	if service == "" {
-		service = s.opts.name + ".mcp"
-	}
-	store := oauth.NewKeyringStore(service)
+	store := oauth.NewKeyringStore(s.oauthService())
 	if !store.Available() {
 		return errors.New("--oauth local needs an OS keyring to store its signing key, but none is available on this host")
 	}

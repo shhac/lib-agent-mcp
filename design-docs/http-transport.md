@@ -98,6 +98,16 @@ tailnet-private (serve) HTTPS URL with no separate `tailscale` step.
 
 Requires the `tailscale` CLI on PATH and Funnel enabled on the tailnet.
 
+## Access log
+
+`--access-log <path>` writes one NDJSON line per HTTP request (`"-"` = stderr) —
+method, path, status, duration, byte count, and the headers that matter for
+connector debugging (`Origin`, `MCP-Protocol-Version`, `User-Agent`,
+`X-Forwarded-For`). `Authorization`/`Cookie` are never written. It promotes the
+throwaway logging proxy used to debug the Claude connector into the tool, and is
+a `statusRecorder` + middleware wrapped outside CORS so it sees the final status
+of every request including preflights and 401s. Only applies with `--http`.
+
 ## Testing
 
 - Handler: initialize/tools-list happy paths, notification → 202, parse error →

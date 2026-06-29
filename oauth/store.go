@@ -80,6 +80,17 @@ func (s *KeyringStore) Delete(key string) error {
 	return s.kr.Delete(key)
 }
 
+// DeleteAll removes every secret under the service namespace — the signing key,
+// pairing code, client registrations, and refresh tokens. It is the "reset to a
+// clean slate" operation: the next server boot regenerates a fresh signing key
+// and pairing code, and every client must re-register and re-pair.
+func (s *KeyringStore) DeleteAll() error {
+	if err := s.ensureAvailable(); err != nil {
+		return err
+	}
+	return s.kr.DeleteAll()
+}
+
 // MemStore is an in-memory SecretStore for tests. It is safe for concurrent use.
 type MemStore struct {
 	mu sync.RWMutex

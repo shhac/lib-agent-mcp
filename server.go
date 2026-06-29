@@ -163,6 +163,10 @@ type Server struct {
 	// oauth, when non-nil, is the local OAuth server gating the HTTP transport.
 	// It is built from --oauth local at serve time, not construction.
 	oauth *oauth.Server
+
+	// accessLog, when non-nil, records one NDJSON line per HTTP request. It is
+	// built from --access-log at serve time.
+	accessLog *accessLogger
 }
 
 var defaultHiddenFlags = []string{"format", "debug", "timeout", "help"}
@@ -197,7 +201,7 @@ func newServer(root *cobra.Command, opts ...Option) *Server {
 //	root.AddCommand(agentmcp.Command(root))
 func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	s := newServer(root, opts...)
-	var httpAddr, oauthMode, publicURL, tailscaleMode string
+	var httpAddr, oauthMode, publicURL, tailscaleMode, accessLogPath string
 	var tailscalePort int
 	cmd := &cobra.Command{
 		Use:         "mcp",
@@ -216,6 +220,14 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 				// HTTP server and tear down any Tailscale tunnel we started.
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 				defer stop()
+				if accessLogPath != "" {
+					al, err := newAccessLogger(accessLogPath)
+					if err != nil {
+						return err
+					}
+					s.accessLog = al
+					defer func() { _ = al.Close() }()
+				}
 				// --tailscale brings up the funnel/serve tunnel and, when
 				// --public-url is unset, derives it from the node's MagicDNS name.
 				resolvedURL, tsDown, err := wireTailscale(ctx, tailscaleMode, tailscalePort, httpAddr, publicURL)
@@ -274,6 +286,10 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 			"tunnel down on exit. Requires --http.")
 	cmd.Flags().IntVar(&tailscalePort, "tailscale-port", 443,
 		"Public HTTPS port for --tailscale (443, 8443, or 10000).")
+	cmd.Flags().StringVar(&accessLogPath, "access-log", "",
+		`Write one NDJSON line per HTTP request to this path ("-" for stderr) for debugging `+
+			"connector traffic. Authorization/Cookie are redacted. Only applies with --http.")
+	cmd.AddCommand(pairCommand(s), usageCommand(s))
 	return cmd
 }
 
