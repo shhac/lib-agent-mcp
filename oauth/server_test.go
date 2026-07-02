@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -525,5 +526,51 @@ func TestResourceBindsToMCPEndpoint(t *testing.T) {
 	}
 	if _, err := bareHost.issuer.Validate(tok); err == nil {
 		t.Error("token bound to the /mcp resource was accepted by a bare-host-audience server")
+	}
+}
+
+// Protect must attach the validated identity to the request context — the
+// hook the MCP layer uses to bind a caller to per-principal credentials.
+// Discarding it (the pre-multi-user behavior) breaks identity binding.
+func TestProtectAttachesPrincipalToContext(t *testing.T) {
+	srv, err := New(Config{Store: NewMemStore(), PublicURL: testPublicURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *Verified
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", srv.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := PrincipalFrom(r.Context()); ok {
+			got = &v
+		}
+	})))
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tok, _, err := srv.issuer.Mint("client-42", "mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got == nil {
+		t.Fatal("handler saw no principal in the request context")
+	}
+	if got.ClientID != "client-42" || got.Scope != "mcp" {
+		t.Errorf("principal = %+v", got)
+	}
+}
+
+func TestPrincipalFromEmptyContext(t *testing.T) {
+	if _, ok := PrincipalFrom(context.Background()); ok {
+		t.Error("expected no principal on a bare context")
 	}
 }

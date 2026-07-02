@@ -29,9 +29,9 @@ type tokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-// Verified is the validated identity carried by an access token — the public
-// affordance for an embedder that wants the client/scope/expiry off a token.
-// The in-tree Protect gate needs only validity, so it discards the value.
+// Verified is the validated identity carried by an access token. Protect
+// attaches it to the request context (see PrincipalFrom), which is how tool
+// dispatch learns which principal a call acts for.
 type Verified struct {
 	ClientID  string
 	Scope     string

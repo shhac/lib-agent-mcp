@@ -121,10 +121,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(TokenPath, s.handleToken)
 }
 
-// Protect is the Resource-Server middleware: it requires a valid bearer token on
-// the wrapped handler (the /mcp endpoint), and otherwise answers 401 with a
-// WWW-Authenticate pointing at the protected-resource metadata so the client can
-// start the OAuth discovery.
+// Protect is the Resource-Server middleware: it requires a valid bearer token
+// on the wrapped handler (the /mcp endpoint) and attaches the token's
+// identity to the request context (PrincipalFrom), otherwise answering 401
+// with a WWW-Authenticate pointing at the protected-resource metadata so the
+// client can start the OAuth discovery.
 func (s *Server) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
@@ -132,11 +133,12 @@ func (s *Server) Protect(next http.Handler) http.Handler {
 			s.challenge(w, "missing bearer token")
 			return
 		}
-		if _, err := s.issuer.Validate(token); err != nil {
+		v, err := s.issuer.Validate(token)
+		if err != nil {
 			s.challenge(w, "invalid or expired token")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), *v)))
 	})
 }
 
