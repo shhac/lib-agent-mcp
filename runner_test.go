@@ -2,8 +2,13 @@ package agentmcp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/shhac/lib-agent-mcp/oauth"
 )
 
 func TestRenderFlag(t *testing.T) {
@@ -76,5 +81,61 @@ func TestRunStartFailureDegrades(t *testing.T) {
 	}
 	if len(out.Content) == 0 {
 		t.Error("translate should still emit a text content block on start failure")
+	}
+}
+
+// echoFixture writes a script that prints its argv and the given env var, so
+// run()-level tests can observe exactly what the subprocess received.
+func echoFixture(t *testing.T, envVar string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "echo.sh")
+	body := "#!/bin/sh\necho \"$@\"\necho \"ENV=$" + envVar + "\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// A configured identity binding must shape every tool subprocess for the
+// caller's principal: its argv (selector flags) and env (fail-closed gate).
+func TestRunAppliesIdentityBindingForPrincipal(t *testing.T) {
+	s := newServer(testRoot(),
+		WithExecutable(echoFixture(t, "AGENT_TEST_REQUIRE")),
+		WithIdentityBinding(func(p oauth.Verified) (argv, env []string) {
+			return []string{"--workspace", "ws-" + p.ClientID},
+				[]string{"AGENT_TEST_REQUIRE=1"}
+		}))
+	tool := &Tool{path: []string{"item", "list"}}
+
+	ctx := oauth.WithPrincipal(context.Background(), oauth.Verified{ClientID: "alice"})
+	res := s.run(ctx, tool, nil, nil, false)
+	out := string(res.stdout)
+	if !strings.Contains(out, "--workspace ws-alice") {
+		t.Errorf("binding argv not applied:\n%s", out)
+	}
+	if !strings.Contains(out, "ENV=1") {
+		t.Errorf("binding env not applied:\n%s", out)
+	}
+}
+
+// Without a principal on the context (stdio, plain HTTP) the binding must not
+// fire — the subprocess runs exactly as the operator's own invocation would.
+func TestRunSkipsIdentityBindingWithoutPrincipal(t *testing.T) {
+	called := false
+	s := newServer(testRoot(),
+		WithExecutable(echoFixture(t, "AGENT_TEST_REQUIRE")),
+		WithIdentityBinding(func(p oauth.Verified) (argv, env []string) {
+			called = true
+			return []string{"--workspace", "nope"}, nil
+		}))
+	tool := &Tool{path: []string{"item", "list"}}
+
+	res := s.run(context.Background(), tool, nil, nil, false)
+	out := string(res.stdout)
+	if called {
+		t.Error("binding invoked without a principal")
+	}
+	if strings.Contains(out, "--workspace") {
+		t.Errorf("binding argv leaked into an unbound call:\n%s", out)
 	}
 }

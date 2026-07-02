@@ -170,6 +170,16 @@ type SecretStore interface {
   their own keyring service; the OAuth layer never reads them. Two trust axes —
   *who-may-connect* vs *what-creds-the-tools-use* — rotate independently.
 
+The bridge between the two axes is the **identity binding**: `Protect`
+attaches the validated token identity (`oauth.Verified`) to the request
+context, and a CLI may install `agentmcp.WithIdentityBinding(fn)` to
+translate that principal into extra subprocess argv/env — e.g. a
+per-principal credential selector (`--workspace <alias>`) plus the CLI's
+fail-closed gate (`AGENT_<X>_REQUIRE_IDENTITY=1`). The binding fires only for
+principal-authenticated calls; stdio and un-gated HTTP run exactly as the
+operator's own invocations. Without a binding, behavior is unchanged: every
+caller acts with the CLI's own credentials.
+
 Dependency direction after the keyring extraction (no cycles):
 ```
 lib-agent-output (base) ; lib-agent-keyring (base, ~zero-dep)

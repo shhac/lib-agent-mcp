@@ -20,8 +20,8 @@ func pairCommand(s *Server) *cobra.Command {
 	}
 
 	rotate := &cobra.Command{
-		Use:         "rotate",
-		Short:       "Issue a fresh pairing code, invalidating the old one",
+		Use:   "rotate",
+		Short: "Issue a fresh pairing code, invalidating the old one",
 		Long: "Rotate the pairing code — use this if the code leaks. Already-connected " +
 			"clients keep working (their tokens are unaffected); only new pairings need the new code.",
 		Annotations: skip,
@@ -43,8 +43,8 @@ func pairCommand(s *Server) *cobra.Command {
 
 	var yes bool
 	reset := &cobra.Command{
-		Use:         "reset",
-		Short:       "Wipe ALL local-OAuth state (signing key, clients, tokens, pairing code)",
+		Use:   "reset",
+		Short: "Wipe ALL local-OAuth state (signing key, clients, tokens, pairing code)",
 		Long: "Reset the local-OAuth layer to a clean slate: rotates the token-signing key " +
 			"(invalidating every issued access and refresh token), and clears registered clients and the " +
 			"pairing code. Use this if a token may be compromised. Every connector must re-register and " +

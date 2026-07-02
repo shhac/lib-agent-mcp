@@ -171,5 +171,3 @@ func (s *Server) toolForGroup(group *cobra.Command) Tool {
 	}
 	return t
 }
-
-

@@ -1,6 +1,10 @@
 package agentmcp
 
-import output "github.com/shhac/lib-agent-output"
+import (
+	output "github.com/shhac/lib-agent-output"
+
+	"github.com/shhac/lib-agent-mcp/oauth"
+)
 
 // File tool defaults.
 const (
@@ -31,7 +35,16 @@ type options struct {
 	// local-OAuth secrets are stored (default "<name>.mcp"). It is kept distinct
 	// from a CLI's own API-credential service so the two never mix.
 	oauthKeyringService string
+
+	identityBinding IdentityBinding
 }
+
+// IdentityBinding translates an authenticated MCP principal into the extra
+// argv and env its tool subprocesses run with — e.g. a per-principal
+// credential selector ("--workspace", "<alias>") plus the CLI's fail-closed
+// gate ("AGENT_<X>_REQUIRE_IDENTITY=1"). The CLI declares the vocabulary; the
+// server guarantees it is applied to every principal-authenticated call.
+type IdentityBinding func(principal oauth.Verified) (argv, env []string)
 
 // Option configures the MCP server.
 type Option func(*options)
@@ -94,4 +107,12 @@ func WithOAuthKeyringService(service string) Option {
 // running binary (os.Executable); primarily useful in tests.
 func WithExecutable(path string) Option {
 	return func(o *options) { o.executable = path }
+}
+
+// WithIdentityBinding installs the translation from an authenticated MCP
+// principal to subprocess argv/env. It fires only for calls that carry a
+// Protect-validated principal (OAuth over HTTP); stdio and un-gated HTTP
+// calls run exactly as the operator's own invocations would.
+func WithIdentityBinding(fn IdentityBinding) Option {
+	return func(o *options) { o.identityBinding = fn }
 }

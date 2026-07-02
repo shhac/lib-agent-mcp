@@ -220,4 +220,3 @@ client config (Claude Desktop / Cursor / VS Code / Windsurf / …):
 Now waiting for an MCP client to connect on stdin — press Ctrl-C to exit.`,
 		mcpServersConfig(name, exec, true), claudeMcpAddLine(name, exec))
 }
-

@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+
+	"github.com/shhac/lib-agent-mcp/oauth"
 )
 
 type runResult struct {
@@ -19,7 +21,13 @@ type runResult struct {
 // NDJSON output and injecting --yes for gated (destructive) commands, since
 // confirmation has already happened at the MCP host layer.
 func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[string]any, injectConfirm bool) runResult {
-	cmd := exec.CommandContext(ctx, s.executable(), buildArgv(tool, args, opts, injectConfirm)...)
+	argv := buildArgv(tool, args, opts, injectConfirm)
+	extraArgv, extraEnv := s.identityInjection(ctx)
+	argv = append(argv, extraArgv...)
+	cmd := exec.CommandContext(ctx, s.executable(), argv...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -37,6 +45,20 @@ func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[st
 		}
 	}
 	return runResult{stdout: out.Bytes(), stderr: errb.Bytes(), exitCode: code}
+}
+
+// identityInjection resolves the configured identity binding against the
+// caller principal Protect attached to ctx. No binding or no principal means
+// no injection — the subprocess then runs with the operator's own defaults.
+func (s *Server) identityInjection(ctx context.Context) (argv, env []string) {
+	if s.opts.identityBinding == nil {
+		return nil, nil
+	}
+	p, ok := oauth.PrincipalFrom(ctx)
+	if !ok {
+		return nil, nil
+	}
+	return s.opts.identityBinding(p)
 }
 
 func (s *Server) executable() string {
