@@ -48,17 +48,28 @@ func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[st
 	return runResult{stdout: out.Bytes(), stderr: errb.Bytes(), exitCode: code}
 }
 
+// boundPrincipal returns the named principal a call acts for, or false for
+// operator calls — no principal on the context, or the anonymous zero grant
+// (stdio, plain HTTP, the legacy shared pairing code). Every per-principal
+// behavior (identity injection, file-root scoping) gates on this one helper.
+func boundPrincipal(ctx context.Context) (oauth.Verified, bool) {
+	p, ok := oauth.PrincipalFrom(ctx)
+	if !ok || p.IsAnonymous() {
+		return oauth.Verified{}, false
+	}
+	return p, true
+}
+
 // identityInjection resolves the configured identity binding against the
-// caller principal Protect attached to ctx. No binding, no principal, or the
-// anonymous operator (a zero grant — the legacy shared pairing code) means
-// no injection: those calls run with the operator's own defaults, exactly as
+// caller's bound principal. No binding or an operator call means no
+// injection: those run with the operator's own defaults, exactly as
 // multi-user.md promises.
 func (s *Server) identityInjection(ctx context.Context) (argv, env []string) {
 	if s.opts.identityBinding == nil {
 		return nil, nil
 	}
-	p, ok := oauth.PrincipalFrom(ctx)
-	if !ok || (p.Name == "" && len(p.Binding) == 0) {
+	p, ok := boundPrincipal(ctx)
+	if !ok {
 		return nil, nil
 	}
 	return s.opts.identityBinding(p)

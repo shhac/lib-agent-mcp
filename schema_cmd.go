@@ -29,17 +29,13 @@ func schemaCommand(s *Server) *cobra.Command {
 // schemaManifest assembles the manifest `mcp schema` prints — a pure view
 // over the constructed server.
 func (s *Server) schemaManifest() map[string]any {
-	rootNames := make([]string, 0, len(s.opts.fileRoots))
-	for _, r := range s.opts.fileRoots {
-		rootNames = append(rootNames, r.Name)
-	}
 	return map[string]any{
 		"name":    s.opts.name,
 		"version": s.opts.version,
 		"tools":   s.tools,
 		// file_roots names the read-only roots the fs tool exposes; paths are
 		// host-local and deliberately not exported.
-		"file_roots": rootNames,
+		"file_roots": s.fileRootNames(),
 		// identity_binding says whether this binary translates a principal
 		// binding into argv/env when *it* runs the tools. The translation is
 		// in-process code, so a host that execs tools directly still needs

@@ -2,6 +2,7 @@ package agentmcp
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,5 +88,115 @@ func TestFsOperatorKeepsFullRoots(t *testing.T) {
 	anon := oauth.WithPrincipal(context.Background(), oauth.Verified{ClientID: "c1"})
 	if res := callFsCtx(anon, s, "get", "cache", "notes.txt"); res.IsError {
 		t.Errorf("anonymous operator lost root access: %+v", res)
+	}
+}
+
+// The CLI-subprocess path (callTool → run → translate) must rewrite FileRefs
+// against the caller's SCOPED roots: a regression to the configured roots
+// would mint refs in another principal's namespace and break round-tripping
+// through the scoped fs get.
+func TestCallToolRewritesFileRefsAgainstScopedRoots(t *testing.T) {
+	dir := t.TempDir()
+	mine := filepath.Join(dir, "T1", "U1", "downloads", "mine.png")
+	writeFile(t, mine, pngBytes())
+
+	script := filepath.Join(t.TempDir(), "emit.sh")
+	body := "#!/bin/sh\necho '{\"id\":\"F1\",\"path\":\"" + mine + "\"}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newServer(testRoot(),
+		WithExecutable(script),
+		WithFileRoots(output.FileRoot{Name: "cache", Path: dir}),
+		WithFileRootScope(func(p oauth.Verified, root output.FileRoot) (output.FileRoot, bool) {
+			return output.FileRoot{Name: root.Name, Path: filepath.Join(root.Path, p.Binding["subtree"])}, true
+		}))
+	tool, ok := s.toolsByName["item_list"]
+	if !ok {
+		t.Fatalf("item_list tool missing; have %v", func() []string {
+			names := make([]string, 0, len(s.toolsByName))
+			for n := range s.toolsByName {
+				names = append(names, n)
+			}
+			return names
+		}())
+	}
+
+	// Named principal: the ref is relative to HER scoped root.
+	res := s.callTool(namedPrincipalCtx("alice", map[string]string{"subtree": "T1/U1"}), tool, nil, nil)
+	rec, ok := res.StructuredContent.Records[0].(map[string]any)
+	if !ok {
+		t.Fatalf("record = %#v", res.StructuredContent.Records[0])
+	}
+	ref, ok := rec["path"].(output.FileRef)
+	if !ok {
+		t.Fatalf("path not rewritten for scoped principal: %#v", rec["path"])
+	}
+	if ref.Root != "cache" || ref.Path != "downloads/mine.png" {
+		t.Errorf("scoped ref = %+v, want path downloads/mine.png (relative to the scoped root)", ref)
+	}
+
+	// Operator: the same output rewrites relative to the full configured root.
+	res = s.callTool(context.Background(), tool, nil, nil)
+	rec = res.StructuredContent.Records[0].(map[string]any)
+	ref, ok = rec["path"].(output.FileRef)
+	if !ok {
+		t.Fatalf("path not rewritten for operator: %#v", rec["path"])
+	}
+	if ref.Path != "T1/U1/downloads/mine.png" {
+		t.Errorf("operator ref = %+v, want path T1/U1/downloads/mine.png", ref)
+	}
+}
+
+// A symlink planted inside one principal's subtree pointing at another's file
+// must not escape the scoped root through any verb.
+func TestFsScopedRootRejectsSymlinkEscape(t *testing.T) {
+	s, dir := fsServer(t, WithFileRootScope(func(p oauth.Verified, root output.FileRoot) (output.FileRoot, bool) {
+		return output.FileRoot{Name: root.Name, Path: filepath.Join(root.Path, p.Binding["subtree"])}, true
+	}))
+	writeFile(t, filepath.Join(dir, "T1", "U2", "downloads", "theirs.txt"), []byte("bob's file"))
+	if err := os.MkdirAll(filepath.Join(dir, "T1", "U1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "T1", "U2", "downloads", "theirs.txt"),
+		filepath.Join(dir, "T1", "U1", "sneaky.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	alice := namedPrincipalCtx("alice", map[string]string{"subtree": "T1/U1"})
+	if res := callFsCtx(alice, s, "get", "cache", "sneaky.txt"); !res.IsError {
+		t.Error("get followed a symlink out of the scoped root")
+	}
+	for p := range recordPaths(callFsCtx(alice, s, "find", "cache", "-e", "txt")) {
+		if strings.Contains(p, "sneaky") || strings.Contains(p, "theirs") {
+			t.Errorf("find surfaced a cross-subtree symlink: %s", p)
+		}
+	}
+}
+
+// Pin the full (Name, Binding) quadrant for effectiveFileRoots: only the
+// zero grant counts as the operator.
+func TestEffectiveFileRootsQuadrant(t *testing.T) {
+	s, dir := fsServer(t, WithFileRootScope(func(p oauth.Verified, root output.FileRoot) (output.FileRoot, bool) {
+		return output.FileRoot{Name: "scoped", Path: root.Path}, true
+	}))
+	cases := map[string]struct {
+		grant    oauth.PrincipalGrant
+		wantName string // "" = no principal semantics don't apply here
+	}{
+		"zero grant is operator": {oauth.PrincipalGrant{}, "cache"},
+		"named, no binding":      {oauth.PrincipalGrant{Name: "a"}, "scoped"},
+		"binding, no name":       {oauth.PrincipalGrant{Binding: map[string]string{"k": "v"}}, "scoped"},
+		"named with binding":     {oauth.PrincipalGrant{Name: "a", Binding: map[string]string{"k": "v"}}, "scoped"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := oauth.WithPrincipal(context.Background(), oauth.Verified{PrincipalGrant: tc.grant})
+			roots := s.effectiveFileRoots(ctx)
+			if len(roots) != 1 || roots[0].Name != tc.wantName {
+				t.Errorf("roots = %+v, want single %q root (path base %s)", roots, tc.wantName, dir)
+			}
+		})
 	}
 }

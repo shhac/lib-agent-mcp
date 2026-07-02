@@ -34,6 +34,15 @@ type PrincipalGrant struct {
 	Binding map[string]string `json:"binding,omitempty"`
 }
 
+// IsAnonymous reports whether this is the zero grant — the anonymous
+// operator established by the legacy shared pairing code. This is THE
+// definition of the operator/named-principal boundary: every fail-closed
+// gate (identity injection, file-root scoping) routes through it, so the two
+// can never drift.
+func (g PrincipalGrant) IsAnonymous() bool {
+	return g.Name == "" && len(g.Binding) == 0
+}
+
 // principalsStoreKey holds the JSON map of named principals in the
 // SecretStore: name → {pairing code, binding}.
 const principalsStoreKey = "principals"

@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	output "github.com/shhac/lib-agent-output"
-
-	"github.com/shhac/lib-agent-mcp/oauth"
 )
 
 // maxFindResults caps a single find so a large tree can't flood the result; the
@@ -65,19 +63,22 @@ func (s *Server) handleFileTool(ctx context.Context, args []string, _ map[string
 	if len(args) > 0 {
 		verb = args[0]
 	}
+	roots := s.effectiveFileRoots(ctx)
 	if verb == "" || verb == "help" {
-		return helpResult(s.fileToolHelp())
+		return helpResult(s.fileToolHelp(roots))
 	}
-	handle, ok := map[string]func(output.FileRoot, []string) toolResult{
-		"find": s.fsFind,
-		"ls":   s.fsList,
-		"get":  s.fsGet,
-	}[verb]
-	if !ok {
-		return helpResult(fmt.Sprintf("unknown verb %q\n\n%s", verb, s.fileToolHelp()))
+	var handle func(output.FileRoot, []string) toolResult
+	switch verb {
+	case "find":
+		handle = s.fsFind
+	case "ls":
+		handle = s.fsList
+	case "get":
+		handle = s.fsGet
+	default:
+		return helpResult(fmt.Sprintf("unknown verb %q\n\n%s", verb, s.fileToolHelp(roots)))
 	}
 
-	roots := s.effectiveFileRoots(ctx)
 	if len(roots) == 0 {
 		return nativeError(output.Newf(output.FixableByAgent,
 			"no file roots are available to this caller (named principals need a file-root scope)"))
@@ -96,14 +97,13 @@ func (s *Server) handleFileTool(ctx context.Context, args []string, _ map[string
 }
 
 // effectiveFileRoots resolves the file roots for this call's principal.
-// Operator calls — no principal on the context, or the anonymous zero grant —
-// see the configured roots. A named principal sees each root as the
-// FileRootScope rewrites it, and no roots at all when the CLI declared no
-// scope: an unscoped shared root would let one principal read another's
-// files, so absence fails closed.
+// Operator calls see the configured roots. A named principal sees each root
+// as the FileRootScope rewrites it, and no roots at all when the CLI
+// declared no scope: an unscoped shared root would let one principal read
+// another's files, so absence fails closed.
 func (s *Server) effectiveFileRoots(ctx context.Context) []output.FileRoot {
-	p, ok := oauth.PrincipalFrom(ctx)
-	if !ok || (p.Name == "" && len(p.Binding) == 0) {
+	p, ok := boundPrincipal(ctx)
+	if !ok {
 		return s.opts.fileRoots
 	}
 	if s.opts.fileRootScope == nil {
@@ -307,10 +307,16 @@ func (s *Server) fileRootNames() []string {
 }
 
 // fileToolHelp is the usage text for the file tool's help verb.
-func (s *Server) fileToolHelp() string {
+// fileToolHelp renders usage for the caller's effective roots, so a scoped
+// principal is never advertised roots their verbs would refuse.
+func (s *Server) fileToolHelp(roots []output.FileRoot) string {
+	rootLine := strings.Join(rootNames(roots), ", ")
+	if rootLine == "" {
+		rootLine = "(none available to this caller)"
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s — read-only local file access\n\n", s.opts.fileToolName)
-	b.WriteString("Roots: " + strings.Join(s.fileRootNames(), ", ") + "\n\n")
+	b.WriteString("Roots: " + rootLine + "\n\n")
 	b.WriteString("Verbs (pass as args):\n")
 	b.WriteString(`  ["find","<root>","-e","png","-e","jpg"]  — search a root by extension and/or a bare glob` + "\n")
 	b.WriteString(`  ["ls","<root>","<dir?>"]                  — list a directory (default the root)` + "\n")
