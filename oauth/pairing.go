@@ -84,6 +84,13 @@ func generatePairingCode() (string, error) {
 	return pairingPrefix + strings.Join(groups, "-"), nil
 }
 
+// constantTimeEqualPairing compares an already-normalized input against a
+// stored code (normalized here), in constant time.
+func constantTimeEqualPairing(normalizedInput, storedCode string) bool {
+	return subtle.ConstantTimeCompare(
+		[]byte(normalizedInput), []byte(normalizePairing(storedCode))) == 1
+}
+
 // normalizePairing canonicalizes a code for comparison: lowercase, strip
 // hyphens/spaces, drop the prefix, and fold the Crockford-confusable characters.
 // Order matters — separators are removed before the prefix, so a de-hyphenated

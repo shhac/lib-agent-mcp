@@ -83,7 +83,7 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request, p authP
 		return
 	}
 
-	ok, err := s.pairing.Verify(r.PostForm.Get("pairing_code"))
+	principal, ok, err := s.pairing.VerifyPrincipal(r.PostForm.Get("pairing_code"))
 	if err != nil {
 		s.authorizeErrorPage(w, "internal error verifying the pairing code")
 		return
@@ -99,6 +99,7 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request, p authP
 		CodeChallenge:       p.codeChallenge,
 		CodeChallengeMethod: p.codeChallengeMethod,
 		Scope:               s.grantedScope(p.scope),
+		Principal:           principal,
 	})
 	if err != nil {
 		s.authorizeErrorPage(w, "internal error issuing the authorization code")

@@ -23,9 +23,14 @@ const signingKeyBytes = 32
 // (with WithValidMethods on parse) closes the "alg" confusion / "none" attacks.
 var signingMethod = jwt.SigningMethodHS256
 
-// tokenClaims is the JWT body: the registered claims plus an OAuth scope.
+// tokenClaims is the JWT body: the registered claims plus an OAuth scope and
+// the pairing-established principal identity (name + binding). Both ride in
+// the signed token, so the Resource Server needs no per-call store lookup and
+// the values are tamper-proof.
 type tokenClaims struct {
-	Scope string `json:"scope,omitempty"`
+	Scope     string            `json:"scope,omitempty"`
+	Principal string            `json:"principal,omitempty"`
+	Binding   map[string]string `json:"binding,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -33,8 +38,14 @@ type tokenClaims struct {
 // attaches it to the request context (see PrincipalFrom), which is how tool
 // dispatch learns which principal a call acts for.
 type Verified struct {
-	ClientID  string
-	Scope     string
+	ClientID string
+	Scope    string
+	// Principal is the named pairing identity the token was approved under
+	// ("" for the anonymous operator / legacy shared code), and Binding its
+	// stored routing data — what WithIdentityBinding translates into
+	// subprocess argv/env.
+	Principal string
+	Binding   map[string]string
 	ExpiresAt time.Time
 }
 
@@ -60,11 +71,14 @@ func NewIssuer(store SecretStore, issuer, audience string, ttl time.Duration) (*
 	return &Issuer{key: key, issuer: issuer, audience: audience, ttl: ttl}, nil
 }
 
-// Mint returns a signed access token for clientID with scope, plus its lifetime.
-func (i *Issuer) Mint(clientID, scope string) (token string, ttl time.Duration, err error) {
+// Mint returns a signed access token for clientID with scope and the pairing
+// principal p, plus its lifetime.
+func (i *Issuer) Mint(clientID, scope string, p PrincipalGrant) (token string, ttl time.Duration, err error) {
 	now := time.Now()
 	claims := tokenClaims{
-		Scope: scope,
+		Scope:     scope,
+		Principal: p.Name,
+		Binding:   p.Binding,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			Subject:   clientID,
@@ -100,6 +114,8 @@ func (i *Issuer) Validate(token string) (*Verified, error) {
 	return &Verified{
 		ClientID:  claims.Subject,
 		Scope:     claims.Scope,
+		Principal: claims.Principal,
+		Binding:   claims.Binding,
 		ExpiresAt: claims.ExpiresAt.Time,
 	}, nil
 }

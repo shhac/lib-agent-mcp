@@ -7,8 +7,9 @@ const refreshStoreKey = "refresh-tokens"
 // refreshGrant is what a refresh token stands for: the client and scope a new
 // access token should be minted with.
 type refreshGrant struct {
-	ClientID string `json:"client_id"`
-	Scope    string `json:"scope"`
+	ClientID  string         `json:"client_id"`
+	Scope     string         `json:"scope"`
+	Principal PrincipalGrant `json:"principal,omitzero"`
 }
 
 // refreshStore issues and exchanges refresh tokens, rotating them on use (the
@@ -21,19 +22,38 @@ func newRefreshStore(store SecretStore) *refreshStore {
 	return &refreshStore{grants: jsonMapStore[refreshGrant]{store: store, key: refreshStoreKey}}
 }
 
-// issue stores a fresh refresh token for clientID/scope and returns it.
-func (s *refreshStore) issue(clientID, scope string) (string, error) {
+// issue stores a fresh refresh token for clientID/scope/principal and
+// returns it.
+func (s *refreshStore) issue(clientID, scope string, p PrincipalGrant) (string, error) {
 	token, err := randToken(32)
 	if err != nil {
 		return "", err
 	}
 	if err := s.grants.mutate(func(m map[string]refreshGrant) bool {
-		m[token] = refreshGrant{ClientID: clientID, Scope: scope}
+		m[token] = refreshGrant{ClientID: clientID, Scope: scope, Principal: p}
 		return true
 	}); err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// removeForPrincipal deletes every refresh token issued under the named
+// principal — the revocation half of removing a principal.
+func (s *refreshStore) removeForPrincipal(name string) error {
+	if name == "" {
+		return nil // the anonymous operator is not a removable principal
+	}
+	return s.grants.mutate(func(m map[string]refreshGrant) bool {
+		changed := false
+		for tok, g := range m {
+			if g.Principal.Name == name {
+				delete(m, tok)
+				changed = true
+			}
+		}
+		return changed
+	})
 }
 
 // exchange consumes token (rotation): it returns the grant and removes the token,

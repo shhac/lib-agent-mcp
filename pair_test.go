@@ -118,3 +118,74 @@ func TestUsageCardCoversConnectionModel(t *testing.T) {
 		}
 	}
 }
+
+func runPairSub(t *testing.T, s *Server, name string, args ...string) (string, error) {
+	t.Helper()
+	sub := findSub(pairCommand(s), name)
+	if sub == nil {
+		t.Fatalf("pair %s subcommand missing", name)
+	}
+	var out bytes.Buffer
+	sub.SetOut(&out)
+	if err := sub.ParseFlags(args); err != nil {
+		t.Fatal(err)
+	}
+	err := sub.RunE(sub, sub.Flags().Args())
+	return out.String(), err
+}
+
+func TestPairAddListRemovePrincipal(t *testing.T) {
+	store := oauth.NewMemStore()
+	s := newServer(testRoot())
+	s.openOAuthStore = func() (oauthSecretStore, error) { return store, nil }
+
+	out, err := runPairSub(t, s, "add", "alice", "--bind", "workspace=alice-acme")
+	if err != nil {
+		t.Fatalf("pair add: %v", err)
+	}
+	if !strings.Contains(out, "mcp-") {
+		t.Errorf("add output should show the pairing code:\n%s", out)
+	}
+	if !strings.Contains(out, "alice") {
+		t.Errorf("add output should name the principal:\n%s", out)
+	}
+
+	// The code verifies as alice with the binding attached.
+	grant, ok, err := oauth.NewPairing(store).VerifyPrincipal(extractPairingCode(t, out))
+	if err != nil || !ok {
+		t.Fatalf("verify minted code: ok=%v err=%v", ok, err)
+	}
+	if grant.Name != "alice" || grant.Binding["workspace"] != "alice-acme" {
+		t.Errorf("grant = %+v", grant)
+	}
+
+	listOut, err := runPairSub(t, s, "list")
+	if err != nil {
+		t.Fatalf("pair list: %v", err)
+	}
+	if !strings.Contains(listOut, "alice") || !strings.Contains(listOut, "workspace=alice-acme") {
+		t.Errorf("list output = %s", listOut)
+	}
+	if strings.Contains(listOut, "mcp-") {
+		t.Errorf("list must never print pairing codes:\n%s", listOut)
+	}
+
+	if _, err := runPairSub(t, s, "remove", "alice"); err != nil {
+		t.Fatalf("pair remove: %v", err)
+	}
+	if _, ok, _ := oauth.NewPairing(store).VerifyPrincipal(extractPairingCode(t, out)); ok {
+		t.Error("removed principal's code still verifies")
+	}
+}
+
+// extractPairingCode pulls the mcp-… code out of command output.
+func extractPairingCode(t *testing.T, out string) string {
+	t.Helper()
+	for _, f := range strings.Fields(out) {
+		if strings.HasPrefix(f, "mcp-") {
+			return strings.TrimRight(f, ".,\n")
+		}
+	}
+	t.Fatalf("no pairing code in output:\n%s", out)
+	return ""
+}

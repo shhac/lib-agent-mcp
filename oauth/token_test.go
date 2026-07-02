@@ -46,7 +46,7 @@ func newTestIssuer(t *testing.T, store SecretStore, ttl time.Duration) *Issuer {
 func TestMintAndValidate(t *testing.T) {
 	iss := newTestIssuer(t, NewMemStore(), time.Hour)
 
-	token, ttl, err := iss.Mint("client-1", "mcp")
+	token, ttl, err := iss.Mint("client-1", "mcp", PrincipalGrant{})
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestMintAndValidate(t *testing.T) {
 
 func TestValidateRejectsTampered(t *testing.T) {
 	iss := newTestIssuer(t, NewMemStore(), time.Hour)
-	token, _, _ := iss.Mint("c", "")
+	token, _, _ := iss.Mint("c", "", PrincipalGrant{})
 	if _, err := iss.Validate(token + "x"); err == nil {
 		t.Error("tampered token accepted")
 	}
@@ -72,7 +72,7 @@ func TestValidateRejectsTampered(t *testing.T) {
 
 func TestValidateRejectsExpired(t *testing.T) {
 	iss := newTestIssuer(t, NewMemStore(), -time.Minute) // already expired
-	token, _, _ := iss.Mint("c", "")
+	token, _, _ := iss.Mint("c", "", PrincipalGrant{})
 	if _, err := iss.Validate(token); err == nil {
 		t.Error("expired token accepted")
 	}
@@ -82,7 +82,7 @@ func TestValidateRejectsWrongAudience(t *testing.T) {
 	store := NewMemStore()
 	minter, _ := NewIssuer(store, testIssuer, "https://other.example.com", time.Hour)
 	checker, _ := NewIssuer(store, testIssuer, testIssuer, time.Hour) // same key, expects our audience
-	token, _, _ := minter.Mint("c", "")
+	token, _, _ := minter.Mint("c", "", PrincipalGrant{})
 	if _, err := checker.Validate(token); err == nil {
 		t.Error("token for a different audience accepted")
 	}
@@ -92,14 +92,14 @@ func TestValidateRejectsWrongIssuer(t *testing.T) {
 	store := NewMemStore()
 	minter, _ := NewIssuer(store, "https://other-issuer.example.com", testIssuer, time.Hour)
 	checker, _ := NewIssuer(store, testIssuer, testIssuer, time.Hour) // same key, expects our issuer
-	token, _, _ := minter.Mint("c", "")
+	token, _, _ := minter.Mint("c", "", PrincipalGrant{})
 	if _, err := checker.Validate(token); err == nil {
 		t.Error("token with a different issuer accepted")
 	}
 }
 
 func TestValidateRejectsWrongKey(t *testing.T) {
-	token, _, _ := newTestIssuer(t, NewMemStore(), time.Hour).Mint("c", "")
+	token, _, _ := newTestIssuer(t, NewMemStore(), time.Hour).Mint("c", "", PrincipalGrant{})
 	other := newTestIssuer(t, NewMemStore(), time.Hour) // different store → different key
 	if _, err := other.Validate(token); err == nil {
 		t.Error("token validated under the wrong signing key")
@@ -125,7 +125,7 @@ func TestValidateRejectsNoneAlg(t *testing.T) {
 
 func TestSigningKeyPersistsAcrossIssuers(t *testing.T) {
 	store := NewMemStore()
-	token, _, _ := newTestIssuer(t, store, time.Hour).Mint("c", "scope-x")
+	token, _, _ := newTestIssuer(t, store, time.Hour).Mint("c", "scope-x", PrincipalGrant{})
 	// A fresh issuer over the same store loads the same key → can validate.
 	v, err := newTestIssuer(t, store, time.Hour).Validate(token)
 	if err != nil {

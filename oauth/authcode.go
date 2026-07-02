@@ -15,6 +15,7 @@ type authGrant struct {
 	CodeChallenge       string
 	CodeChallengeMethod string
 	Scope               string
+	Principal           PrincipalGrant
 
 	expiresAt time.Time
 }

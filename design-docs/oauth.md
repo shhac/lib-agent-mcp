@@ -19,10 +19,13 @@ expected to stand up or use an external Authorization Server. So the lib-agent-m
 server is **both** the OAuth 2.1 **Authorization Server (AS)** and **Resource
 Server (RS)** for a single user — it mints its own tokens and validates them.
 
-This is deliberately a *single-user, self-issued* gate: there are no accounts.
-"Your identity" is "whoever can complete the approval step on your server." OAuth
-here is the standards-compliant shape the UI requires, with you as the sole
-authority.
+This began as a *single-user, self-issued* gate: no accounts, "your identity"
+is "whoever can complete the approval step on your server." OAuth here is the
+standards-compliant shape the UI requires, with you as the sole authority.
+Named principals (per-person pairing codes whose tokens carry a credential
+binding — see multi-user.md) now layer real caller identity on top; the
+shared code remains as the anonymous operator, so single-user setups are
+unchanged.
 
 ## Decisions (the load-bearing ones)
 

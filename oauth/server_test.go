@@ -513,7 +513,7 @@ func TestResourceBindsToMCPEndpoint(t *testing.T) {
 	if srv.issuer.audience != resource {
 		t.Errorf("issuer audience = %q, want %q", srv.issuer.audience, resource)
 	}
-	tok, _, err := srv.issuer.Mint("client-1", "mcp")
+	tok, _, err := srv.issuer.Mint("client-1", "mcp", PrincipalGrant{})
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestProtectAttachesPrincipalToContext(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	tok, _, err := srv.issuer.Mint("client-42", "mcp")
+	tok, _, err := srv.issuer.Mint("client-42", "mcp", PrincipalGrant{})
 	if err != nil {
 		t.Fatal(err)
 	}
