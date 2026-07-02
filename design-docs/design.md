@@ -203,6 +203,18 @@ family CLIs get rich `structuredContent` + `fixable_by`.
   `fixtures.json`, exercising read-only, typed-flag, error, and gated-delete
   paths.
 
+## mcp schema — the host contract
+
+`<tool> mcp schema` prints the manifest as JSON and exits: name, version, the
+full reflected tool list (identical to `tools/list`), the fs root names, and
+whether an identity binding is declared. It exists for a future host binary
+that mounts several CLIs behind one origin: the host execs each registered
+binary's `mcp schema` at startup to learn its tools (schemas out-of-process,
+matching the execution model), then routes tool calls back through the
+binary. Because the identity-binding translation is in-process code, a host
+must invoke tools *through* this binary rather than reconstructing raw
+commands itself.
+
 ## Open / future
 
 - **HTTP / streamable-HTTP transport** for the Cowork Custom Connector path.

@@ -108,7 +108,7 @@ func Command(root *cobra.Command, opts ...Option) *cobra.Command {
 	cmd.Flags().StringVar(&accessLogPath, "access-log", "",
 		`Write one NDJSON line per HTTP request to this path ("-" for stderr) for debugging `+
 			"connector traffic. Authorization/Cookie are redacted. Only applies with --http.")
-	cmd.AddCommand(pairCommand(s), usageCommand(s))
+	cmd.AddCommand(pairCommand(s), usageCommand(s), schemaCommand(s))
 	return cmd
 }
 
