@@ -40,12 +40,10 @@ type tokenClaims struct {
 type Verified struct {
 	ClientID string
 	Scope    string
-	// Principal is the named pairing identity the token was approved under
-	// ("" for the anonymous operator / legacy shared code), and Binding its
-	// stored routing data — what WithIdentityBinding translates into
-	// subprocess argv/env.
-	Principal string
-	Binding   map[string]string
+	// PrincipalGrant is the named pairing identity the token was approved
+	// under (zero for the anonymous operator / shared code): Name, plus the
+	// Binding that WithIdentityBinding translates into subprocess argv/env.
+	PrincipalGrant
 	ExpiresAt time.Time
 }
 
@@ -112,11 +110,10 @@ func (i *Issuer) Validate(token string) (*Verified, error) {
 		return nil, errors.New("oauth: invalid token")
 	}
 	return &Verified{
-		ClientID:  claims.Subject,
-		Scope:     claims.Scope,
-		Principal: claims.Principal,
-		Binding:   claims.Binding,
-		ExpiresAt: claims.ExpiresAt.Time,
+		ClientID:       claims.Subject,
+		Scope:          claims.Scope,
+		PrincipalGrant: PrincipalGrant{Name: claims.Principal, Binding: claims.Binding},
+		ExpiresAt:      claims.ExpiresAt.Time,
 	}, nil
 }
 

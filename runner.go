@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 
 	"github.com/shhac/lib-agent-mcp/oauth"
 )
@@ -48,14 +49,16 @@ func (s *Server) run(ctx context.Context, tool *Tool, args []string, opts map[st
 }
 
 // identityInjection resolves the configured identity binding against the
-// caller principal Protect attached to ctx. No binding or no principal means
-// no injection — the subprocess then runs with the operator's own defaults.
+// caller principal Protect attached to ctx. No binding, no principal, or the
+// anonymous operator (a zero grant — the legacy shared pairing code) means
+// no injection: those calls run with the operator's own defaults, exactly as
+// multi-user.md promises.
 func (s *Server) identityInjection(ctx context.Context) (argv, env []string) {
 	if s.opts.identityBinding == nil {
 		return nil, nil
 	}
 	p, ok := oauth.PrincipalFrom(ctx)
-	if !ok {
+	if !ok || (p.Name == "" && len(p.Binding) == 0) {
 		return nil, nil
 	}
 	return s.opts.identityBinding(p)
@@ -77,7 +80,7 @@ func (s *Server) executable() string {
 // --format jsonl to force the NDJSON contract.
 func buildArgv(tool *Tool, args []string, opts map[string]any, injectConfirm bool) []string {
 	argv := append([]string{}, tool.path...)
-	for _, name := range sortedOptionKeys(opts) {
+	for _, name := range slices.Sorted(maps.Keys(opts)) {
 		argv = append(argv, renderFlag(name, opts[name])...)
 	}
 	argv = append(argv, args...)
@@ -85,15 +88,6 @@ func buildArgv(tool *Tool, args []string, opts map[string]any, injectConfirm boo
 		argv = append(argv, "--yes")
 	}
 	return append(argv, "--format", "jsonl")
-}
-
-func sortedOptionKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func renderFlag(name string, v any) []string {

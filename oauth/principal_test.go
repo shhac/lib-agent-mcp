@@ -2,8 +2,10 @@ package oauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 )
 
@@ -80,7 +82,7 @@ func TestFullFlowCarriesPrincipalIntoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Principal != "alice" || v.Binding["workspace"] != "alice-acme" {
+	if v.Name != "alice" || v.Binding["workspace"] != "alice-acme" {
 		t.Errorf("verified = %+v", v)
 	}
 
@@ -99,7 +101,7 @@ func TestFullFlowCarriesPrincipalIntoTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v2.Principal != "alice" || v2.Binding["workspace"] != "alice-acme" {
+	if v2.Name != "alice" || v2.Binding["workspace"] != "alice-acme" {
 		t.Errorf("refreshed verified = %+v", v2)
 	}
 }
@@ -114,7 +116,7 @@ func TestRemovePrincipalRevokesCodeAndRefreshTokens(t *testing.T) {
 	tokens := h.exchange(t, clientID, authCode)
 	refresh, _ := tokens["refresh_token"].(string)
 
-	removed, err := RemovePrincipal(store, "bob")
+	removed, err := NewPairing(store).RemovePrincipal("bob")
 	if err != nil || !removed {
 		t.Fatalf("remove: %v removed=%v", err, removed)
 	}
@@ -127,5 +129,126 @@ func TestRemovePrincipalRevokesCodeAndRefreshTokens(t *testing.T) {
 	defer rResp.Body.Close()
 	if rResp.StatusCode == http.StatusOK {
 		t.Error("removed principal's refresh token still exchanges")
+	}
+}
+
+// Removing one principal must not touch the others' (or the anonymous
+// operator's) refresh tokens — the revocation filter's blast radius.
+func TestRemovePrincipalSparesOthers(t *testing.T) {
+	store := NewMemStore()
+	h := newHarnessWithStore(t, store)
+
+	pairFor := func(code string) string {
+		clientID := h.registerClient(t)
+		authCode := h.authorize(t, clientID, code).Query().Get("code")
+		tokens := h.exchange(t, clientID, authCode)
+		refresh, _ := tokens["refresh_token"].(string)
+		if refresh == "" {
+			t.Fatal("no refresh token")
+		}
+		return refresh
+	}
+
+	aliceCode, _ := h.srv.pairing.AddPrincipal("alice", nil)
+	bobCode, _ := h.srv.pairing.AddPrincipal("bob", nil)
+	sharedCode, _ := h.srv.PairingCode()
+
+	aliceRefresh := pairFor(aliceCode)
+	bobRefresh := pairFor(bobCode)
+	anonRefresh := pairFor(sharedCode)
+
+	if _, err := NewPairing(store).RemovePrincipal("bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	exchangeStatus := func(refresh string) int {
+		resp := h.postForm(t, TokenPath, url.Values{
+			"grant_type": {"refresh_token"}, "refresh_token": {refresh}})
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if exchangeStatus(bobRefresh) == http.StatusOK {
+		t.Error("bob's refresh token survived his removal")
+	}
+	if exchangeStatus(aliceRefresh) != http.StatusOK {
+		t.Error("alice's refresh token was collateral damage of bob's removal")
+	}
+	if exchangeStatus(anonRefresh) != http.StatusOK {
+		t.Error("the anonymous operator's refresh token was collateral damage")
+	}
+}
+
+// removeForPrincipal("") must be a no-op: the anonymous operator is not a
+// removable principal, and "" must never act as a match-everything filter.
+func TestRemoveForPrincipalEmptyNameIsNoop(t *testing.T) {
+	store := NewMemStore()
+	rs := newRefreshStore(store)
+	tok, err := rs.issue("client-1", "mcp", PrincipalGrant{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.removeForPrincipal(""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := rs.exchange(tok); !ok {
+		t.Error("anonymous refresh grant deleted by empty-name removal")
+	}
+}
+
+// With several principals registered, each code must resolve to exactly its
+// own grant — never a sibling's.
+func TestVerifyPrincipalResolvesAmongMany(t *testing.T) {
+	p := NewPairing(NewMemStore())
+	codes := map[string]string{}
+	for _, name := range []string{"alice", "bob", "carol"} {
+		code, err := p.AddPrincipal(name, map[string]string{"workspace": name + "-ws"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		codes[name] = code
+	}
+	for name, code := range codes {
+		grant, ok, err := p.VerifyPrincipal(code)
+		if err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", name, ok, err)
+		}
+		if grant.Name != name || grant.Binding["workspace"] != name+"-ws" {
+			t.Errorf("%s's code resolved to %+v", name, grant)
+		}
+	}
+	for _, input := range []string{"", "   "} {
+		if _, ok, _ := p.VerifyPrincipal(input); ok {
+			t.Errorf("blank input %q verified against the principal set", input)
+		}
+	}
+}
+
+// Concurrent AddPrincipal calls on one Pairing must all survive — the
+// principals map store is a shared field precisely so its mutex serializes
+// the load-modify-save cycles.
+func TestConcurrentAddPrincipalsAllSurvive(t *testing.T) {
+	p := NewPairing(NewMemStore())
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = p.AddPrincipal(fmt.Sprintf("p%02d", i), nil)
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("add %d: %v", i, err)
+		}
+	}
+	principals, err := p.Principals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(principals) != n {
+		t.Errorf("principals after %d concurrent adds = %d (lost updates)", n, len(principals))
 	}
 }

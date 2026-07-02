@@ -66,10 +66,10 @@ func TestPairRotateSuccess(t *testing.T) {
 	if newCode == old {
 		t.Error("rotate did not change the pairing code")
 	}
-	if ok, _ := oauth.NewPairing(store).Verify(old); ok {
+	if _, ok, _ := oauth.NewPairing(store).VerifyPrincipal(old); ok {
 		t.Error("the old pairing code still verifies after rotate")
 	}
-	if ok, _ := oauth.NewPairing(store).Verify(newCode); !ok {
+	if _, ok, _ := oauth.NewPairing(store).VerifyPrincipal(newCode); !ok {
 		t.Error("the new pairing code does not verify")
 	}
 }
@@ -188,4 +188,69 @@ func extractPairingCode(t *testing.T, out string) string {
 	}
 	t.Fatalf("no pairing code in output:\n%s", out)
 	return ""
+}
+
+func TestParseBindPairs(t *testing.T) {
+	cases := map[string]struct {
+		in      []string
+		want    map[string]string
+		wantErr bool
+	}{
+		"nil":         {in: nil, want: nil},
+		"valid":       {in: []string{"a=1", "b=2"}, want: map[string]string{"a": "1", "b": "2"}},
+		"empty value": {in: []string{"k="}, want: map[string]string{"k": ""}},
+		"last wins":   {in: []string{"k=1", "k=2"}, want: map[string]string{"k": "2"}},
+		"no equals":   {in: []string{"foo"}, wantErr: true},
+		"empty key":   {in: []string{"=v"}, wantErr: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseBindPairs(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("[%s] = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestPairRemoveUnknownPrincipalErrors(t *testing.T) {
+	store := oauth.NewMemStore()
+	s := newServer(testRoot())
+	s.openOAuthStore = func() (oauthSecretStore, error) { return store, nil }
+	if _, err := runPairSub(t, s, "remove", "nobody"); err == nil {
+		t.Error("removing an unknown principal should error")
+	}
+}
+
+func TestPairResetWipesNamedPrincipals(t *testing.T) {
+	store := oauth.NewMemStore()
+	s := newServer(testRoot())
+	s.openOAuthStore = func() (oauthSecretStore, error) { return store, nil }
+
+	out, err := runPairSub(t, s, "add", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := extractPairingCode(t, out)
+
+	if _, err := runPairSub(t, s, "reset", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := oauth.NewPairing(store).VerifyPrincipal(code); ok {
+		t.Error("pair reset left a named principal's code verifiable")
+	}
 }

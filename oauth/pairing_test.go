@@ -46,7 +46,7 @@ func TestPairingVerify(t *testing.T) {
 		"not-a-code":                            false,
 	}
 	for input, want := range cases {
-		got, err := p.Verify(input)
+		_, got, err := p.VerifyPrincipal(input)
 		if err != nil {
 			t.Fatalf("Verify(%q): %v", input, err)
 		}
@@ -62,7 +62,7 @@ func TestPairingConfusableChars(t *testing.T) {
 	p := NewPairing(NewMemStore())
 	code, _ := p.Code()
 	confusable := strings.NewReplacer("0", "O", "1", "I").Replace(code)
-	ok, err := p.Verify(confusable)
+	_, ok, err := p.VerifyPrincipal(confusable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +81,10 @@ func TestPairingRotateInvalidatesOld(t *testing.T) {
 	if rotated == old {
 		t.Fatal("Rotate produced the same code")
 	}
-	if ok, _ := p.Verify(old); ok {
+	if _, ok, _ := p.VerifyPrincipal(old); ok {
 		t.Error("old code still verifies after rotate")
 	}
-	if ok, _ := p.Verify(rotated); !ok {
+	if _, ok, _ := p.VerifyPrincipal(rotated); !ok {
 		t.Error("rotated code does not verify")
 	}
 }

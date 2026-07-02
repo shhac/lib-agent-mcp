@@ -21,14 +21,23 @@ const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 var crockEnc = base32.NewEncoding(crockford).WithPadding(base32.NoPadding)
 
-// Pairing manages the local pairing code — the single reusable secret a human
-// enters at the authorize endpoint to prove "it's me" (there are no accounts).
-// Because it's reusable, every client (Claude, Codex, …) pairs with the same
-// code, which is what allows many concurrent connections.
-type Pairing struct{ store SecretStore }
+// Pairing manages the pairing codes humans enter at the authorize endpoint:
+// the shared operator code (reusable, so every client can pair with it) plus
+// the named-principal codes (see principal.go).
+type Pairing struct {
+	store SecretStore
+	// principals is held as a field — like clientRegistry and refreshStore —
+	// so its mutex actually serializes concurrent principal mutations.
+	principals *jsonMapStore[principalRecord]
+}
 
 // NewPairing returns a Pairing backed by store.
-func NewPairing(store SecretStore) *Pairing { return &Pairing{store: store} }
+func NewPairing(store SecretStore) *Pairing {
+	return &Pairing{
+		store:      store,
+		principals: &jsonMapStore[principalRecord]{store: store, key: principalsStoreKey},
+	}
+}
 
 // Code returns the pairing code, generating and persisting one on first use so
 // it is stable across restarts.
@@ -52,21 +61,6 @@ func (p *Pairing) Rotate() (string, error) {
 		return "", err
 	}
 	return code, nil
-}
-
-// Verify reports whether input matches the pairing code, tolerant of case,
-// hyphens, spaces, and the Crockford-confusable characters a human might mistype
-// (O→0, I/L→1). The comparison is constant-time.
-func (p *Pairing) Verify(input string) (bool, error) {
-	code, err := p.Code()
-	if err != nil {
-		return false, err
-	}
-	got := normalizePairing(input)
-	want := normalizePairing(code)
-	// Always go through the constant-time compare — an empty or short input is
-	// rejected by the length mismatch, not by a faster path.
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1, nil
 }
 
 // generatePairingCode returns a prefixed, hyphen-grouped, ~125-bit Crockford

@@ -102,12 +102,13 @@ func TestRunAppliesIdentityBindingForPrincipal(t *testing.T) {
 	s := newServer(testRoot(),
 		WithExecutable(echoFixture(t, "AGENT_TEST_REQUIRE")),
 		WithIdentityBinding(func(p oauth.Verified) (argv, env []string) {
-			return []string{"--workspace", "ws-" + p.ClientID},
+			return []string{"--workspace", "ws-" + p.Name},
 				[]string{"AGENT_TEST_REQUIRE=1"}
 		}))
 	tool := &Tool{path: []string{"item", "list"}}
 
-	ctx := oauth.WithPrincipal(context.Background(), oauth.Verified{ClientID: "alice"})
+	ctx := oauth.WithPrincipal(context.Background(),
+		oauth.Verified{PrincipalGrant: oauth.PrincipalGrant{Name: "alice"}})
 	res := s.run(ctx, tool, nil, nil, false)
 	out := string(res.stdout)
 	if !strings.Contains(out, "--workspace ws-alice") {
@@ -137,5 +138,66 @@ func TestRunSkipsIdentityBindingWithoutPrincipal(t *testing.T) {
 	}
 	if strings.Contains(out, "--workspace") {
 		t.Errorf("binding argv leaked into an unbound call:\n%s", out)
+	}
+}
+
+// Two principals through one server must each get exactly their own binding
+// injected — a leak here is a cross-principal credential bug.
+func TestRunKeepsPrincipalBindingsDistinct(t *testing.T) {
+	s := newServer(testRoot(),
+		WithExecutable(echoFixture(t, "AGENT_TEST_WS")),
+		WithIdentityBinding(func(p oauth.Verified) (argv, env []string) {
+			ws := p.Binding["workspace"]
+			if ws == "" {
+				return nil, nil
+			}
+			return []string{"--workspace", ws}, []string{"AGENT_TEST_WS=" + ws}
+		}))
+	tool := &Tool{path: []string{"item", "list"}}
+
+	for name, ws := range map[string]string{"alice": "alice-acme", "bob": "bob-acme"} {
+		ctx := oauth.WithPrincipal(context.Background(),
+			oauth.Verified{PrincipalGrant: oauth.PrincipalGrant{Name: name, Binding: map[string]string{"workspace": ws}}})
+		out := string(s.run(ctx, tool, nil, nil, false).stdout)
+		if !strings.Contains(out, "--workspace "+ws) || !strings.Contains(out, "ENV="+ws) {
+			t.Errorf("%s: binding not applied:\n%s", name, out)
+		}
+		other := "alice-acme"
+		if ws == other {
+			other = "bob-acme"
+		}
+		if strings.Contains(out, other) {
+			t.Errorf("%s: saw the OTHER principal's binding:\n%s", name, out)
+		}
+	}
+
+	// A principal with an empty binding injects nothing stale.
+	ctx := oauth.WithPrincipal(context.Background(), oauth.Verified{PrincipalGrant: oauth.PrincipalGrant{Name: "carol"}})
+	out := string(s.run(ctx, tool, nil, nil, false).stdout)
+	if strings.Contains(out, "--workspace") || strings.Contains(out, "ENV=alice") || strings.Contains(out, "ENV=bob") {
+		t.Errorf("empty-binding principal got stale injection:\n%s", out)
+	}
+}
+
+// The anonymous operator (legacy shared code → zero grant) runs unbound, as
+// multi-user.md promises: the binding must not fire for a principal-less
+// authenticated call.
+func TestRunAnonymousOperatorIsUnbound(t *testing.T) {
+	called := false
+	s := newServer(testRoot(),
+		WithExecutable(echoFixture(t, "AGENT_TEST_REQUIRE")),
+		WithIdentityBinding(func(p oauth.Verified) (argv, env []string) {
+			called = true
+			return []string{"--workspace", "nope"}, []string{"AGENT_TEST_REQUIRE=1"}
+		}))
+	tool := &Tool{path: []string{"item", "list"}}
+
+	ctx := oauth.WithPrincipal(context.Background(), oauth.Verified{ClientID: "client-1"})
+	out := string(s.run(ctx, tool, nil, nil, false).stdout)
+	if called {
+		t.Error("binding fired for the anonymous operator (zero grant)")
+	}
+	if strings.Contains(out, "--workspace") || strings.Contains(out, "ENV=1") {
+		t.Errorf("anonymous call got binding injection:\n%s", out)
 	}
 }

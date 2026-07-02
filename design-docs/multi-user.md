@@ -31,7 +31,7 @@ structural rather than silent.
    revocation.
 
 3. **Principal propagation.** `Protect` validates the token and attaches the
-   `Verified{ClientID, Principal, Binding, …}` to the request context
+   `Verified{ClientID, PrincipalGrant{Name, Binding}, …}` to the request context
    (`PrincipalFrom`). It flows through dispatch into the tool runner
    untouched.
 

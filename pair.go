@@ -3,12 +3,23 @@ package agentmcp
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/shhac/lib-agent-mcp/oauth"
 	"github.com/spf13/cobra"
 )
+
+// pairing opens the local-OAuth secret store and wraps it in the pairing
+// layer — the shared prologue of every pair subcommand.
+func (s *Server) pairing() (*oauth.Pairing, error) {
+	store, err := s.oauthStore()
+	if err != nil {
+		return nil, err
+	}
+	return oauth.NewPairing(store), nil
+}
 
 // pairCommand is `mcp pair`, the operator-facing maintenance surface for the
 // local-OAuth pairing code and stored secrets. It runs without starting the
@@ -28,11 +39,11 @@ func pairCommand(s *Server) *cobra.Command {
 			"clients keep working (their tokens are unaffected); only new pairings need the new code.",
 		Annotations: skip,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := s.oauthStore()
+			pairing, err := s.pairing()
 			if err != nil {
 				return err
 			}
-			code, err := oauth.NewPairing(store).Rotate()
+			code, err := pairing.Rotate()
 			if err != nil {
 				return err
 			}
@@ -88,18 +99,17 @@ func pairAddCommand(s *Server) *cobra.Command {
 		Long: "Add (or rotate) a named principal: a person who pairs with their own code and whose " +
 			"tool calls carry the attached binding — e.g. --bind workspace=<alias> to pin their credential set. " +
 			"Re-running for an existing name rotates its code; already-issued tokens keep their old binding until expiry.",
-		Args:        cobra.ExactArgs(1),
-		Annotations: map[string]string{AnnotationSkip: "true"},
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			binding, err := parseBindPairs(binds)
 			if err != nil {
 				return err
 			}
-			store, err := s.oauthStore()
+			pairing, err := s.pairing()
 			if err != nil {
 				return err
 			}
-			code, err := oauth.NewPairing(store).AddPrincipal(args[0], binding)
+			code, err := pairing.AddPrincipal(args[0], binding)
 			if err != nil {
 				return err
 			}
@@ -110,22 +120,22 @@ func pairAddCommand(s *Server) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVar(&binds, "bind", nil, "binding data as key=value (repeatable), carried in the principal's tokens")
+	Skip(cmd)
 	return cmd
 }
 
 // pairListCommand lists principals and bindings — never codes.
 func pairListCommand(s *Server) *cobra.Command {
-	return &cobra.Command{
-		Use:         "list",
-		Short:       "List named principals and their bindings (codes are never shown)",
-		Args:        cobra.NoArgs,
-		Annotations: map[string]string{AnnotationSkip: "true"},
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List named principals and their bindings (codes are never shown)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			store, err := s.oauthStore()
+			pairing, err := s.pairing()
 			if err != nil {
 				return err
 			}
-			principals, err := oauth.NewPairing(store).Principals()
+			principals, err := pairing.Principals()
 			if err != nil {
 				return err
 			}
@@ -133,45 +143,41 @@ func pairListCommand(s *Server) *cobra.Command {
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "no named principals (only the shared operator pairing code)")
 				return err
 			}
-			names := make([]string, 0, len(principals))
-			for name := range principals {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				line := name
-				binding := principals[name]
-				keys := make([]string, 0, len(binding))
-				for k := range binding {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					line += fmt.Sprintf(" %s=%s", k, binding[k])
-				}
-				if _, err := fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {
+			for _, name := range slices.Sorted(maps.Keys(principals)) {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), formatPrincipalLine(name, principals[name])); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+	Skip(cmd)
+	return cmd
+}
+
+// formatPrincipalLine renders one principal as "name k=v k2=v2" with binding
+// keys in stable sorted order.
+func formatPrincipalLine(name string, binding map[string]string) string {
+	line := name
+	for _, k := range slices.Sorted(maps.Keys(binding)) {
+		line += fmt.Sprintf(" %s=%s", k, binding[k])
+	}
+	return line
 }
 
 // pairRemoveCommand revokes a principal: its code stops pairing and its
 // refresh tokens are deleted; outstanding access tokens expire on their TTL.
 func pairRemoveCommand(s *Server) *cobra.Command {
-	return &cobra.Command{
-		Use:         "remove <name>",
-		Short:       "Revoke a named principal (pairing code + refresh tokens; access tokens lapse on expiry)",
-		Args:        cobra.ExactArgs(1),
-		Annotations: map[string]string{AnnotationSkip: "true"},
+	cmd := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Revoke a named principal (pairing code + refresh tokens; access tokens lapse on expiry)",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := s.oauthStore()
+			pairing, err := s.pairing()
 			if err != nil {
 				return err
 			}
-			removed, err := oauth.RemovePrincipal(store, args[0])
+			removed, err := pairing.RemovePrincipal(args[0])
 			if err != nil {
 				return err
 			}
@@ -183,6 +189,8 @@ func pairRemoveCommand(s *Server) *cobra.Command {
 			return err
 		},
 	}
+	Skip(cmd)
+	return cmd
 }
 
 // parseBindPairs turns repeated key=value flags into a binding map.

@@ -1,6 +1,10 @@
 package oauth
 
-import "context"
+import (
+	"context"
+	"maps"
+	"slices"
+)
 
 // principalKey keys the Verified identity Protect attaches to the request
 // context.
@@ -41,10 +45,6 @@ type principalRecord struct {
 	Binding map[string]string `json:"binding,omitempty"`
 }
 
-func (p *Pairing) principals() *jsonMapStore[principalRecord] {
-	return &jsonMapStore[principalRecord]{store: p.store, key: principalsStoreKey}
-}
-
 // AddPrincipal mints (or rotates) the pairing code for a named principal and
 // records its binding. Completing the OAuth approval with this code yields
 // tokens whose subject principal is name and which carry binding.
@@ -53,7 +53,7 @@ func (p *Pairing) AddPrincipal(name string, binding map[string]string) (string, 
 	if err != nil {
 		return "", err
 	}
-	if err := p.principals().mutate(func(m map[string]principalRecord) bool {
+	if err := p.principals.mutate(func(m map[string]principalRecord) bool {
 		m[name] = principalRecord{Code: code, Binding: binding}
 		return true
 	}); err != nil {
@@ -62,24 +62,31 @@ func (p *Pairing) AddPrincipal(name string, binding map[string]string) (string, 
 	return code, nil
 }
 
-// RemovePrincipal deletes a named principal's pairing code, reporting whether
-// it existed. Callers wanting the full revocation (refresh tokens included)
-// use the package-level RemovePrincipal.
+// RemovePrincipal fully revokes a named principal: its pairing code stops
+// verifying and its outstanding refresh tokens are deleted. It reports
+// whether the principal existed. Already-minted access tokens live out their
+// (short) TTL — that window is documented, not pretended away.
 func (p *Pairing) RemovePrincipal(name string) (bool, error) {
 	removed := false
-	err := p.principals().mutate(func(m map[string]principalRecord) bool {
+	err := p.principals.mutate(func(m map[string]principalRecord) bool {
 		if _, ok := m[name]; ok {
 			delete(m, name)
 			removed = true
 		}
 		return removed
 	})
-	return removed, err
+	if err != nil {
+		return false, err
+	}
+	if err := newRefreshStore(p.store).removeForPrincipal(name); err != nil {
+		return removed, err
+	}
+	return removed, nil
 }
 
 // Principals lists the named principals and their bindings (never codes).
 func (p *Pairing) Principals() (map[string]map[string]string, error) {
-	records, err := p.principals().load()
+	records, err := p.principals.load()
 	if err != nil {
 		return nil, err
 	}
@@ -90,47 +97,53 @@ func (p *Pairing) Principals() (map[string]map[string]string, error) {
 	return out, nil
 }
 
-// VerifyPrincipal matches input against the shared pairing code (the
-// anonymous operator) and every named principal's code, constant-time each.
-// It returns the matched identity.
+// VerifyPrincipal matches input against every acceptable pairing code — the
+// shared operator code (as the anonymous, name-less grant) and each named
+// principal's — and returns the matched identity.
 func (p *Pairing) VerifyPrincipal(input string) (PrincipalGrant, bool, error) {
-	ok, err := p.Verify(input)
-	if err != nil {
-		return PrincipalGrant{}, false, err
-	}
-	if ok {
-		return PrincipalGrant{}, true, nil
-	}
-	records, err := p.principals().load()
+	candidates, err := p.candidates()
 	if err != nil {
 		return PrincipalGrant{}, false, err
 	}
 	got := normalizePairing(input)
-	// Compare against every record (no early exit) so timing doesn't reveal
-	// which principal matched.
+	// Every candidate is compared, no early exit, so response timing reveals
+	// neither whether nor which entry matched. The !found guard keeps
+	// first-match-wins without a break — it is load-bearing for the
+	// constant-time property, not an optimization.
 	var matched PrincipalGrant
 	found := false
-	for name, rec := range records {
-		if constantTimeEqualPairing(got, rec.Code) && !found {
-			matched = PrincipalGrant{Name: name, Binding: rec.Binding}
+	for _, c := range candidates {
+		if constantTimeEqualPairing(got, c.code) && !found {
+			matched = c.grant
 			found = true
 		}
 	}
 	return matched, found, nil
 }
 
-// RemovePrincipal fully revokes a named principal against store: its pairing
-// code stops verifying and its outstanding refresh tokens are deleted.
-// Already-minted access tokens live out their (short) TTL — document the
-// window, don't pretend it away.
-func RemovePrincipal(store SecretStore, name string) (bool, error) {
-	pairing := NewPairing(store)
-	removed, err := pairing.RemovePrincipal(name)
+// pairingCandidate pairs one acceptable code with the grant it establishes.
+type pairingCandidate struct {
+	code  string
+	grant PrincipalGrant
+}
+
+// candidates lists every acceptable pairing code in stable order: the shared
+// operator code first (the zero grant), then the named principals sorted by
+// name.
+func (p *Pairing) candidates() ([]pairingCandidate, error) {
+	shared, err := p.Code()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	if err := newRefreshStore(store).removeForPrincipal(name); err != nil {
-		return removed, err
+	records, err := p.principals.load()
+	if err != nil {
+		return nil, err
 	}
-	return removed, nil
+	out := make([]pairingCandidate, 0, 1+len(records))
+	out = append(out, pairingCandidate{code: shared})
+	for _, name := range slices.Sorted(maps.Keys(records)) {
+		rec := records[name]
+		out = append(out, pairingCandidate{code: rec.Code, grant: PrincipalGrant{Name: name, Binding: rec.Binding}})
+	}
+	return out, nil
 }
