@@ -65,6 +65,14 @@ structural rather than silent.
 - **Anonymous-operator calls are unbound.** stdio, plain HTTP (already
   documented as unauthenticated), and legacy-code pairings run with the
   CLI's own defaults, exactly as before this design.
+- **File roots are scoped per principal.** The `fs` tool resolves its roots
+  per call: operator calls see the configured roots; a named principal sees
+  each root as the CLI's `WithFileRootScope` rewrites it (e.g. narrowed to
+  that principal's own cache subtree), and **no roots at all** when the CLI
+  declared no scope — an unscoped shared root would let one principal read
+  another's downloaded files, so absence fails closed. FileRef rewriting in
+  tool output uses the same per-call roots, so a principal's references
+  resolve within their own view.
 
 ## Revocation and its window
 

@@ -37,7 +37,14 @@ type options struct {
 	oauthKeyringService string
 
 	identityBinding IdentityBinding
+	fileRootScope   FileRootScope
 }
+
+// FileRootScope rewrites one configured file root for a named principal —
+// typically narrowing it to the caller's own subtree — or hides it (false).
+// Operator calls (stdio, plain HTTP, the anonymous shared pairing code) never
+// consult it: they keep the configured roots.
+type FileRootScope func(principal oauth.Verified, root output.FileRoot) (output.FileRoot, bool)
 
 // IdentityBinding translates an authenticated MCP principal into the extra
 // argv and env its tool subprocesses run with — e.g. a per-principal
@@ -115,4 +122,11 @@ func WithExecutable(path string) Option {
 // calls run exactly as the operator's own invocations would.
 func WithIdentityBinding(fn IdentityBinding) Option {
 	return func(o *options) { o.identityBinding = fn }
+}
+
+// WithFileRootScope installs the per-principal file-root rewrite. Without it,
+// a named principal sees NO file roots at all — an unscoped shared root would
+// let one principal read another's files, so absence fails closed.
+func WithFileRootScope(fn FileRootScope) Option {
+	return func(o *options) { o.fileRootScope = fn }
 }

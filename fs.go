@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	output "github.com/shhac/lib-agent-output"
+
+	"github.com/shhac/lib-agent-mcp/oauth"
 )
 
 // maxFindResults caps a single find so a large tree can't flood the result; the
@@ -58,7 +60,7 @@ func (s *Server) fileTool() Tool {
 // handleFileTool dispatches a file-tool call: resolve the verb, then the named
 // root, then run the verb. Unknown verbs and a missing/unknown root return
 // usage or a structured error rather than failing opaquely.
-func (s *Server) handleFileTool(_ context.Context, args []string, _ map[string]any) toolResult {
+func (s *Server) handleFileTool(ctx context.Context, args []string, _ map[string]any) toolResult {
 	verb := ""
 	if len(args) > 0 {
 		verb = args[0]
@@ -75,17 +77,45 @@ func (s *Server) handleFileTool(_ context.Context, args []string, _ map[string]a
 		return helpResult(fmt.Sprintf("unknown verb %q\n\n%s", verb, s.fileToolHelp()))
 	}
 
+	roots := s.effectiveFileRoots(ctx)
+	if len(roots) == 0 {
+		return nativeError(output.Newf(output.FixableByAgent,
+			"no file roots are available to this caller (named principals need a file-root scope)"))
+	}
 	rest := args[1:]
 	if len(rest) == 0 {
 		return nativeError(output.Newf(output.FixableByAgent,
-			"%s needs a root name; one of: %s", verb, strings.Join(s.fileRootNames(), ", ")))
+			"%s needs a root name; one of: %s", verb, strings.Join(rootNames(roots), ", ")))
 	}
-	root, ok := s.fileRoot(rest[0])
+	root, ok := rootByName(roots, rest[0])
 	if !ok {
 		return nativeError(output.Newf(output.FixableByAgent,
-			"unknown root %q; one of: %s", rest[0], strings.Join(s.fileRootNames(), ", ")))
+			"unknown root %q; one of: %s", rest[0], strings.Join(rootNames(roots), ", ")))
 	}
 	return handle(root, rest[1:])
+}
+
+// effectiveFileRoots resolves the file roots for this call's principal.
+// Operator calls — no principal on the context, or the anonymous zero grant —
+// see the configured roots. A named principal sees each root as the
+// FileRootScope rewrites it, and no roots at all when the CLI declared no
+// scope: an unscoped shared root would let one principal read another's
+// files, so absence fails closed.
+func (s *Server) effectiveFileRoots(ctx context.Context) []output.FileRoot {
+	p, ok := oauth.PrincipalFrom(ctx)
+	if !ok || (p.Name == "" && len(p.Binding) == 0) {
+		return s.opts.fileRoots
+	}
+	if s.opts.fileRootScope == nil {
+		return nil
+	}
+	var out []output.FileRoot
+	for _, r := range s.opts.fileRoots {
+		if scoped, ok := s.opts.fileRootScope(p, r); ok {
+			out = append(out, scoped)
+		}
+	}
+	return out
 }
 
 // fsError wraps an OS filesystem error as an agent-fixable tool error — one
@@ -251,9 +281,9 @@ func fsRecordsResult(refs []output.FileRef, truncated bool) toolResult {
 	return toolResult{Content: []contentBlock{textBlock(text)}, StructuredContent: sc, IsError: false}
 }
 
-// fileRoot looks up a configured root by name.
-func (s *Server) fileRoot(name string) (output.FileRoot, bool) {
-	for _, r := range s.opts.fileRoots {
+// rootByName looks up a root by name among the caller's effective roots.
+func rootByName(roots []output.FileRoot, name string) (output.FileRoot, bool) {
+	for _, r := range roots {
 		if r.Name == name {
 			return r, true
 		}
@@ -261,13 +291,19 @@ func (s *Server) fileRoot(name string) (output.FileRoot, bool) {
 	return output.FileRoot{}, false
 }
 
-// fileRootNames lists the configured root names, for help and error messages.
-func (s *Server) fileRootNames() []string {
-	names := make([]string, len(s.opts.fileRoots))
-	for i, r := range s.opts.fileRoots {
+// rootNames lists root names, for help and error messages.
+func rootNames(roots []output.FileRoot) []string {
+	names := make([]string, len(roots))
+	for i, r := range roots {
 		names[i] = r.Name
 	}
 	return names
+}
+
+// fileRootNames lists the configured root names — the static (schema/help)
+// view; per-call paths use rootNames over effectiveFileRoots.
+func (s *Server) fileRootNames() []string {
+	return rootNames(s.opts.fileRoots)
 }
 
 // fileToolHelp is the usage text for the file tool's help verb.
